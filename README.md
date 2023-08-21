@@ -28,16 +28,15 @@ meno <large file>
 
 You have the following keyboard shortcuts in the pager:
 
-- 'g'/'G': Go to first/last line in file
-- 'b'/PgUp: Go up a page
-- 'f'/Space/PgDown: Go down a page
-- 'j'/ArrowDown: Go down a line
-- 'k'/ArrowUp: Go up a line
-- 'q'/CtrlC: Quit
+- `g`/`G`: Go to first/last line in file
+- `b`/PgUp: Go up a page
+- `f`/Space/PgDown: Go down a page
+- `j`/ArrowDown: Go down a line
+- `k`/ArrowUp: Go up a line
+- `q`/CtrlC: Quit
 
 But the most important ones are:
 
-- '/': Find down
-- '?': Find up
-- 'n': (after a search) Next result
-- 'N': (after a search) Previous result
+- `/`: Find down
+- `?`: Find up
+- `n`/`N': (after a search) Go to the next/previous result
