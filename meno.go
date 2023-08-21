@@ -15,7 +15,14 @@ import (
 func main() {
 	flag.Parse()
 	path := flag.Arg(0)
-	m, err := NewMeno(path)
+
+	inFile, err := os.Open(path)
+	if err != nil {
+		log.Fatalf("Open(%q): %v", path, err)
+	}
+	defer inFile.Close()
+
+	m, err := NewMeno(inFile)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -42,13 +49,11 @@ type Meno struct {
 	style  tcell.Style
 
 	logFile *os.File
-
 	inFile  *os.File
-	inLines []string
 
-	w, h         int
-	wrappedLines []string
-	firstLine    int
+	w, h      int
+	firstLine int
+	data      *indexedData
 
 	mode Mode
 
@@ -66,13 +71,12 @@ type Meno struct {
 }
 
 func (m *Meno) Close() {
-	m.inFile.Close()
 	if m.logFile != nil {
 		m.logFile.Close()
 	}
 }
 
-func NewMeno(filePath string) (*Meno, error) {
+func NewMeno(inFile *os.File) (*Meno, error) {
 	s, err := tcell.NewScreen()
 	if err != nil {
 		return nil, err
@@ -84,17 +88,13 @@ func NewMeno(filePath string) (*Meno, error) {
 	m := &Meno{
 		screen: s,
 		style:  tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorReset),
+		inFile: inFile,
 
 		quitC:         make(chan struct{}),
 		eventC:        make(chan tcell.Event),
 		searchResultC: make(chan searchResult),
 	}
 	s.SetStyle(m.style)
-
-	if m.inFile, err = os.Open(filePath); err != nil {
-		return nil, fmt.Errorf("Open(%q): %v", filePath, err)
-	}
-
 	s.Clear()
 
 	return m, nil
@@ -118,8 +118,6 @@ func (m *Meno) logf(pattern string, args ...interface{}) {
 }
 
 func (m *Meno) Run() error {
-	m.readFile()
-
 	go m.screen.ChannelEvents(m.eventC, m.quitC)
 
 	for {
@@ -193,7 +191,7 @@ func (m *Meno) keyDownPaging(ev *tcell.EventKey) {
 		case 'g':
 			m.jumpToLine(0)
 		case 'G':
-			m.jumpToLine(len(m.wrappedLines))
+			m.jumpToLine(m.data.VisibleLines())
 		case 'j':
 			m.jumpLine(1)
 		case 'k':
@@ -289,10 +287,8 @@ func (m *Meno) startSearch(oppositeDirection bool) {
 	}
 
 	m.activeSearch = &runningSearch{
-		query: string(m.searchInput),
-		data: &indexedData{
-			lines: m.wrappedLines,
-		},
+		query:         string(m.searchInput),
+		data:          m.data,
 		resultC:       m.searchResultC,
 		quitC:         m.quitActiveSearchC,
 		startFromLine: startFromLine,
@@ -303,8 +299,70 @@ func (m *Meno) startSearch(oppositeDirection bool) {
 	go m.activeSearch.run()
 }
 
+type visibleLine struct {
+	line       string
+	hasNewline bool
+}
+
 type indexedData struct {
-	lines []string
+	width int
+	lines []visibleLine
+}
+
+func NewIndexedData(inFile *os.File, width int) *indexedData {
+	id := &indexedData{
+		width: width,
+	}
+
+	scanner := bufio.NewScanner(inFile)
+	scanner.Split(bufio.ScanLines)
+
+	for scanner.Scan() {
+		id.lines = append(id.lines, splitLine(scanner.Text(), width)...)
+	}
+	return id
+}
+
+func splitLine(line string, width int) []visibleLine {
+	var result []visibleLine
+	for len(line) > width {
+		part := line[:width]
+		line = line[width:]
+		result = append(result, visibleLine{
+			line:       part,
+			hasNewline: false,
+		})
+	}
+	result = append(result, visibleLine{
+		line:       line,
+		hasNewline: true,
+	})
+	return result
+}
+
+func (id *indexedData) VisibleLines() int {
+	return len(id.lines)
+}
+
+func (id *indexedData) Resize(width int) {
+	if width == id.width {
+		return
+	}
+	id.width = width
+	newLines := make([]visibleLine, 0, len(id.lines))
+
+	var sb strings.Builder
+	for i := 0; i < len(id.lines); i++ {
+		vl := id.lines[i]
+		sb.WriteString(vl.line)
+		if vl.hasNewline {
+			newLines = append(newLines, splitLine(sb.String(), width)...)
+			sb.Reset()
+			// Try to save some memory
+			id.lines[i] = visibleLine{}
+		}
+	}
+	id.lines = newLines
 }
 
 type searchResult struct {
@@ -335,10 +393,10 @@ func (p *runningSearch) run() {
 	returned, max := 0, p.maxResults
 
 	matchesLine := func(i int) bool {
-		line := p.data.lines[i]
+		vline := p.data.lines[i]
 
 		// If the line contains the query, great!
-		if strings.Contains(line, p.query) {
+		if strings.Contains(vline.line, p.query) {
 			return true
 		}
 
@@ -347,14 +405,20 @@ func (p *runningSearch) run() {
 
 		suffix := ""
 		{
+			var sb strings.Builder
 			j := i + 1
-			for len(suffix) < len(p.query) {
+			for sb.Len() < len(p.query) {
 				if j > len(p.data.lines)-1 {
 					break
 				}
-				suffix = fmt.Sprintf("%s%s", suffix, p.data.lines[j])
+				vl := p.data.lines[j]
+				sb.WriteString(vl.line)
+				if vl.hasNewline {
+					sb.WriteRune('\n')
+				}
 				j++
 			}
+			suffix = sb.String()
 			//p.logf("doSearch fetched %d suffix lines", j-i)
 		}
 
@@ -364,7 +428,7 @@ func (p *runningSearch) run() {
 			return false
 		}
 
-		final := fmt.Sprintf("%s%s", p.data.lines[i], suffix)
+		final := fmt.Sprintf("%s%s", vline.line, suffix)
 		return strings.Contains(final, p.query)
 	}
 
@@ -431,7 +495,7 @@ func (m *Meno) changeMode(mode Mode) {
 }
 
 func (m *Meno) maxFirstLine() int {
-	return len(m.wrappedLines) - m.h + 1
+	return m.data.VisibleLines() - m.h + 1
 }
 
 func (m *Meno) pageSize() int {
@@ -463,20 +527,16 @@ func (m *Meno) resized() {
 	// Update every visible cell.
 	m.screen.Sync()
 
-	m.logf("Window resized to %dx%d - (re)building wrappedLines", m.w, m.h)
-	m.wrappedLines = make([]string, 0, len(m.inLines))
-	for _, line := range m.inLines {
-		for len(line) > m.w {
-			part := line[:m.w]
-			line = line[m.w:]
-			m.wrappedLines = append(m.wrappedLines, part)
-		}
-		// TODO: Include data to indicate if the newline character follows the
-		// wrapped line or not.
-		m.wrappedLines = append(m.wrappedLines, line)
+	if m.data == nil {
+		m.logf("Starting scan of input file")
+		m.data = NewIndexedData(m.inFile, m.w)
+		m.logf("Have %d visible lines", m.data.VisibleLines())
+	} else {
+		m.logf("Window resized to %dx%d - (re)building data", m.w, m.h)
+		m.data.Resize(m.w)
+		m.firstLine = 0
+		m.logf("Have %d visible lines", m.data.VisibleLines())
 	}
-	m.firstLine = 0
-	m.logf("wrappedLines contains %d lines", len(m.wrappedLines))
 }
 
 func (m *Meno) showScreen() {
@@ -486,10 +546,10 @@ func (m *Meno) showScreen() {
 	// Leave the last line for the prompt.
 	lastRow := m.h - 1
 
-	for i := m.firstLine; i < len(m.wrappedLines); i++ {
-		line := m.wrappedLines[i]
+	for i := m.firstLine; i < m.data.VisibleLines(); i++ {
+		vline := m.data.lines[i]
 		col := 0
-		for _, r := range []rune(line) {
+		for _, r := range []rune(vline.line) {
 			m.screen.SetContent(col, row, r, nil, m.style)
 			col++
 		}
@@ -534,13 +594,5 @@ func (m *Meno) showScreen() {
 }
 
 func (m *Meno) readFile() error {
-	m.logf("Starting scan of input file")
-	scanner := bufio.NewScanner(m.inFile)
-	scanner.Split(bufio.ScanLines)
-
-	for scanner.Scan() {
-		m.inLines = append(m.inLines, scanner.Text())
-	}
-	m.logf("Read %d lines", len(m.inLines))
 	return nil
 }
