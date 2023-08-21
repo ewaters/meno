@@ -39,4 +39,4 @@ But the most important ones are:
 
 - `/`: Find down
 - `?`: Find up
-- `n`/`N': (after a search) Go to the next/previous result
+- `n`/`N`: (after a search) Go to the next/previous result
