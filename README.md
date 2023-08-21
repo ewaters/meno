@@ -17,7 +17,7 @@ Assuming you have a $USER/bin directory:
 ```bash
 git checkout https://github.com/ewaters/meno.git
 cd meno
-git build -o ~/bin/meno *.go
+go build -o ~/bin/meno *.go
 ```
 
 ## Usage
