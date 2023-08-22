@@ -22,6 +22,18 @@ func NewIndexedData(inFile io.Reader, width int) *IndexedData {
 		width: width,
 	}
 
+	readC := make(chan string)
+	resultC := make(chan visibleLine)
+	go generateVisibleLines(width, readC, resultC)
+
+	doneC := make(chan bool)
+	go func() {
+		for result := range resultC {
+			id.lines = append(id.lines, result)
+		}
+		doneC <- true
+	}()
+
 	// Read 100 visible lines worth of bytes at a time.
 	bufSize := width * 100
 	if overrideBufSize > 0 {
@@ -29,44 +41,10 @@ func NewIndexedData(inFile io.Reader, width int) *IndexedData {
 	}
 	buf := make([]byte, bufSize)
 
-	leftOver := ""
-	endsWithNewline := false
 	for {
 		n, err := inFile.Read(buf)
 		if n > 0 {
-			lines := strings.Split(leftOver+string(buf[:n]), "\n")
-			if enableLogger {
-				log.Printf("Read %q, have lines %q", string(buf[:n]), lines)
-			}
-			leftOver = ""
-			endsWithNewline = buf[n-1] == '\n'
-			if endsWithNewline {
-				// The last element in the lines list is an empty string; let's
-				// pop it.
-				lines = lines[:len(lines)-1]
-			}
-
-			for i := 0; i < len(lines); i++ {
-				line := lines[i]
-				lastLine := i == len(lines)-1
-				for len(line) > width {
-					part := line[:width]
-					line = line[width:]
-					id.lines = append(id.lines, visibleLine{
-						line:       part,
-						hasNewline: false,
-					})
-				}
-				if !lastLine || endsWithNewline {
-					id.lines = append(id.lines, visibleLine{
-						line:       line,
-						hasNewline: true,
-					})
-				} else {
-					leftOver = line
-				}
-			}
-
+			readC <- string(buf[:n])
 		}
 		if err != nil {
 			if err == io.EOF {
@@ -78,36 +56,64 @@ func NewIndexedData(inFile io.Reader, width int) *IndexedData {
 			break
 		}
 	}
-	if len(leftOver) > 0 {
-		id.lines = append(id.lines, visibleLine{
-			line:       leftOver,
-			hasNewline: endsWithNewline,
-		})
-	}
+	close(readC)
+	<-doneC
 
 	return id
+}
+
+func generateVisibleLines(width int, inC chan string, outC chan visibleLine) {
+	leftOver := ""
+	endsWithNewline := false
+	if enableLogger {
+		log.Printf("Starting range over inC")
+	}
+	for part := range inC {
+		lines := strings.Split(leftOver+part, "\n")
+		if enableLogger {
+			log.Printf("Read %q, have lines %q", part, lines)
+		}
+		leftOver = ""
+		endsWithNewline = part[len(part)-1] == '\n'
+		if endsWithNewline {
+			// The last element in the lines list is an empty string; let's
+			// pop it.
+			lines = lines[:len(lines)-1]
+		}
+
+		for i := 0; i < len(lines); i++ {
+			line := lines[i]
+			lastLine := i == len(lines)-1
+			for len(line) > width {
+				part := line[:width]
+				line = line[width:]
+				outC <- visibleLine{
+					line:       part,
+					hasNewline: false,
+				}
+			}
+			if !lastLine || endsWithNewline {
+				outC <- visibleLine{
+					line:       line,
+					hasNewline: true,
+				}
+			} else {
+				leftOver = line
+			}
+		}
+	}
+	if len(leftOver) > 0 {
+		outC <- visibleLine{
+			line:       leftOver,
+			hasNewline: endsWithNewline,
+		}
+	}
+	close(outC)
 }
 
 type visibleLine struct {
 	line       string
 	hasNewline bool
-}
-
-func splitLine(line string, width int) []visibleLine {
-	var result []visibleLine
-	for len(line) > width {
-		part := line[:width]
-		line = line[width:]
-		result = append(result, visibleLine{
-			line:       part,
-			hasNewline: false,
-		})
-	}
-	result = append(result, visibleLine{
-		line:       line,
-		hasNewline: true,
-	})
-	return result
 }
 
 func (id *IndexedData) VisibleLines() int {
@@ -119,21 +125,32 @@ func (id *IndexedData) Resize(width int) {
 		return
 	}
 	id.width = width
-	newLines := make([]visibleLine, 0, len(id.lines))
 
-	var sb strings.Builder
+	readC := make(chan string)
+	resultC := make(chan visibleLine)
+	go generateVisibleLines(width, readC, resultC)
+
+	doneC := make(chan bool)
+	newLines := make([]visibleLine, 0, len(id.lines))
+	go func() {
+		for result := range resultC {
+			newLines = append(newLines, result)
+		}
+		doneC <- true
+	}()
+
 	for i := 0; i < len(id.lines); i++ {
 		vl := id.lines[i]
-		sb.WriteString(vl.line)
 		if vl.hasNewline {
-			newLines = append(newLines, splitLine(sb.String(), width)...)
-			sb.Reset()
-			// Try to save some memory
-			id.lines[i] = visibleLine{}
+			readC <- vl.line + "\n"
+		} else {
+			readC <- vl.line
 		}
+		// Try to save some memory.
+		id.lines[i] = visibleLine{}
 	}
-	if sb.Len() > 0 {
-		newLines = append(newLines, splitLine(sb.String(), width)...)
-	}
+	close(readC)
+	<-doneC
+
 	id.lines = newLines
 }
