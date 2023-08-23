@@ -1,6 +1,7 @@
 package data
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"strings"
@@ -114,6 +115,49 @@ func generateVisibleLines(width int, inC chan string, outC chan visibleLine) {
 type visibleLine struct {
 	line       string
 	hasNewline bool
+}
+
+func (id *IndexedData) LineMatches(i int, query string) bool {
+	if i < 0 || i > len(id.lines)-1 {
+		log.Fatalf("LineMatches(%d, %q) called with out-of-bounds index", i, query)
+	}
+	vline := id.lines[i]
+
+	// If the line contains the query, great!
+	if strings.Contains(vline.line, query) {
+		return true
+	}
+
+	// Otherwise, concatenate a suffix to the string to see if the query
+	// *starts* on the lineNumber i but isn't *entirely* on that line.
+
+	suffix := ""
+	{
+		var sb strings.Builder
+		j := i + 1
+		for sb.Len() < len(query) {
+			if j > len(id.lines)-1 {
+				break
+			}
+			vl := id.lines[j]
+			sb.WriteString(vl.line)
+			if vl.hasNewline {
+				sb.WriteRune('\n')
+			}
+			j++
+		}
+		suffix = sb.String()
+		//p.logf("doSearch fetched %d suffix lines", j-i)
+	}
+
+	// However, if this suffix entirely has the query, then we return
+	// false since line 'i' doesn't contain it.
+	if strings.Contains(suffix, query) {
+		return false
+	}
+
+	final := fmt.Sprintf("%s%s", vline.line, suffix)
+	return strings.Contains(final, query)
 }
 
 func (id *IndexedData) VisibleLines() int {

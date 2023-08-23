@@ -2,7 +2,6 @@ package data
 
 import (
 	"fmt"
-	"strings"
 )
 
 type searchResult struct {
@@ -32,46 +31,6 @@ type runningSearch struct {
 func (p *runningSearch) run() {
 	returned, max := 0, p.maxResults
 
-	matchesLine := func(i int) bool {
-		vline := p.data.lines[i]
-
-		// If the line contains the query, great!
-		if strings.Contains(vline.line, p.query) {
-			return true
-		}
-
-		// Otherwise, concatenate a suffix to the string to see if the query
-		// *starts* on the lineNumber i but isn't *entirely* on that line.
-
-		suffix := ""
-		{
-			var sb strings.Builder
-			j := i + 1
-			for sb.Len() < len(p.query) {
-				if j > len(p.data.lines)-1 {
-					break
-				}
-				vl := p.data.lines[j]
-				sb.WriteString(vl.line)
-				if vl.hasNewline {
-					sb.WriteRune('\n')
-				}
-				j++
-			}
-			suffix = sb.String()
-			//p.logf("doSearch fetched %d suffix lines", j-i)
-		}
-
-		// However, if this suffix entirely has the query, then we return
-		// false since line 'i' doesn't contain it.
-		if strings.Contains(suffix, p.query) {
-			return false
-		}
-
-		final := fmt.Sprintf("%s%s", vline.line, suffix)
-		return strings.Contains(final, p.query)
-	}
-
 	keepGoing := func(i int) bool {
 		select {
 		case <-p.quitC:
@@ -79,7 +38,7 @@ func (p *runningSearch) run() {
 		default:
 		}
 
-		if !matchesLine(i) {
+		if !p.data.LineMatches(i, p.query) {
 			return true
 		}
 
