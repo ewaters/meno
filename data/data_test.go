@@ -134,6 +134,21 @@ func TestLineMatches(t *testing.T) {
 				},
 			},
 		},
+		{
+			input: "Now.\nThen.\nWhenever",
+			want: []string{
+				"Now.\n",
+				"Then.\n",
+				"Whenever",
+			},
+			matchTest: []matchTest{
+				{
+					line:  0,
+					query: "Now.\nThen",
+					want:  true,
+				},
+			},
+		},
 	} {
 		r := strings.NewReader(tc.input)
 		id := NewIndexedData(r, width)

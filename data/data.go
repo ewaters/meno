@@ -1,7 +1,6 @@
 package data
 
 import (
-	"fmt"
 	"io"
 	"log"
 	"strings"
@@ -156,8 +155,18 @@ func (id *IndexedData) LineMatches(i int, query string) bool {
 		return false
 	}
 
-	final := fmt.Sprintf("%s%s", vline.line, suffix)
-	return strings.Contains(final, query)
+	var final strings.Builder
+	final.WriteString(vline.line)
+	if vline.hasNewline {
+		final.WriteRune('\n')
+	}
+
+	if enableLogger {
+		log.Printf("LineMatches(%d, %q) against %q + %q", i, query, final.String(), suffix)
+	}
+	final.WriteString(suffix)
+
+	return strings.Contains(final.String(), query)
 }
 
 func (id *IndexedData) VisibleLines() int {
