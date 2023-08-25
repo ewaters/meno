@@ -1,7 +1,6 @@
 package data
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -9,14 +8,12 @@ func init() {
 	enableLogger = true
 }
 
+const defaultMaxQuery = 10
+
 func TestIndexedData(t *testing.T) {
 	const width = 15
 	const defaultBufSize = 10
-	for _, tc := range []struct {
-		input  string
-		want   []string
-		resize int
-	}{
+	for _, tc := range []basicTest{
 		{
 			input: "Now is the time for the good of our country",
 			want: []string{
@@ -55,29 +52,7 @@ func TestIndexedData(t *testing.T) {
 		},
 	} {
 		overrideBufSize = defaultBufSize
-		r := strings.NewReader(tc.input)
-		id := NewIndexedData(r, width)
-		if tc.resize > 0 {
-			id.Resize(tc.resize)
-		}
-		var got []string
-		for _, vl := range id.lines {
-			line := vl.line
-			if vl.hasNewline {
-				line += "\n"
-			}
-			got = append(got, line)
-		}
-
-		if len(got) != len(tc.want) {
-			t.Logf("\n Got: %#v\nWant: %#v", got, tc.want)
-			t.Fatalf("Got %d lines, wanted %d", len(got), len(tc.want))
-		}
-		for i := range got {
-			if got[i] != tc.want[i] {
-				t.Fatalf("Line %d: got %q, want %q", i, got[i], tc.want[i])
-			}
-		}
+		tc.indexedData(t)
 	}
 }
 
@@ -90,16 +65,17 @@ type matchTest struct {
 func TestLineMatches(t *testing.T) {
 	const width = 15
 	for _, tc := range []struct {
-		input     string
-		want      []string
+		basicTest
 		matchTest []matchTest
 	}{
 		{
-			input: "Now is the time for the good of our country",
-			want: []string{
-				"Now is the time",
-				" for the good o",
-				"f our country",
+			basicTest: basicTest{
+				input: "Now is the time for the good of our country",
+				want: []string{
+					"Now is the time",
+					" for the good o",
+					"f our country",
+				},
 			},
 			matchTest: []matchTest{
 				{
@@ -135,11 +111,13 @@ func TestLineMatches(t *testing.T) {
 			},
 		},
 		{
-			input: "Now.\nThen.\nWhenever",
-			want: []string{
-				"Now.\n",
-				"Then.\n",
-				"Whenever",
+			basicTest: basicTest{
+				input: "Now.\nThen.\nWhenever",
+				want: []string{
+					"Now.\n",
+					"Then.\n",
+					"Whenever",
+				},
 			},
 			matchTest: []matchTest{
 				{
@@ -150,27 +128,7 @@ func TestLineMatches(t *testing.T) {
 			},
 		},
 	} {
-		r := strings.NewReader(tc.input)
-		id := NewIndexedData(r, width)
-		var got []string
-		for _, vl := range id.lines {
-			line := vl.line
-			if vl.hasNewline {
-				line += "\n"
-			}
-			got = append(got, line)
-		}
-
-		if len(got) != len(tc.want) {
-			t.Logf("\n Got: %#v\nWant: %#v", got, tc.want)
-			t.Fatalf("Got %d lines, wanted %d", len(got), len(tc.want))
-		}
-		for i := range got {
-			if got[i] != tc.want[i] {
-				t.Fatalf("Line %d: got %q, want %q", i, got[i], tc.want[i])
-			}
-		}
-
+		id := tc.indexedData(t)
 		for _, mt := range tc.matchTest {
 			got := id.LineMatches(mt.line, mt.query)
 			if got != mt.want {

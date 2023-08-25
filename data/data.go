@@ -4,12 +4,9 @@ import (
 	"io"
 	"log"
 	"strings"
-)
 
-type IndexedData struct {
-	width int
-	lines []visibleLine
-}
+	"github.com/ewaters/meno/trigram"
+)
 
 // For testing.
 var (
@@ -17,10 +14,60 @@ var (
 	enableLogger    = false
 )
 
-func NewIndexedData(inFile io.Reader, width int) *IndexedData {
+type IndexedLines struct {
+	vl       []visibleLine
+	index    *trigram.Index
+	maxQuery int
+}
+
+// NewIndexedLines takes a max query value which indicates how long of a query
+// should we optimize the index for. Queries that are longer than this value
+// will not be able to benefit from the index and will need to brute force
+// search.
+func NewIndexedLines(maxQuery int) *IndexedLines {
+	return &IndexedLines{
+		index:    trigram.NewIndex(),
+		maxQuery: maxQuery,
+	}
+}
+
+// AddLine will add and index the passed line. You must call FinishAddLine() once
+// you're done adding lines.
+func (il *IndexedLines) AddLine(vl visibleLine) {
+	il.vl = append(il.vl, vl)
+
+	i := len(il.vl)
+	il.index.AddWithID(vl.line, uint64(i))
+}
+
+// FinishAddLine will complete any remaining processing.
+func (il *IndexedLines) FinishAddLine() {
+}
+
+func (il *IndexedLines) Size() int {
+	return len(il.vl)
+}
+
+func (il *IndexedLines) Line(idx int) visibleLine {
+	return il.vl[idx]
+}
+
+func (il *IndexedLines) Clear(idx int) {
+	// We don't clear the index since this is only done during a rebuild.
+	il.vl[idx] = visibleLine{}
+}
+
+type IndexedData struct {
+	lines *IndexedLines
+	width int
+}
+
+func NewIndexedData(inFile io.Reader, width int, maxQuery int) *IndexedData {
 	id := &IndexedData{
+		lines: NewIndexedLines(maxQuery),
 		width: width,
 	}
+	defer id.lines.FinishAddLine()
 
 	readC := make(chan string)
 	resultC := make(chan visibleLine)
@@ -29,7 +76,7 @@ func NewIndexedData(inFile io.Reader, width int) *IndexedData {
 	doneC := make(chan bool)
 	go func() {
 		for result := range resultC {
-			id.lines = append(id.lines, result)
+			id.lines.AddLine(result)
 		}
 		doneC <- true
 	}()
@@ -117,10 +164,10 @@ type visibleLine struct {
 }
 
 func (id *IndexedData) LineMatches(i int, query string) bool {
-	if i < 0 || i > len(id.lines)-1 {
+	if i < 0 || i > id.lines.Size()-1 {
 		log.Fatalf("LineMatches(%d, %q) called with out-of-bounds index", i, query)
 	}
-	vline := id.lines[i]
+	vline := id.lines.Line(i)
 
 	// If the line contains the query, great!
 	if strings.Contains(vline.line, query) {
@@ -135,10 +182,10 @@ func (id *IndexedData) LineMatches(i int, query string) bool {
 		var sb strings.Builder
 		j := i + 1
 		for sb.Len() < len(query) {
-			if j > len(id.lines)-1 {
+			if j > id.lines.Size()-1 {
 				break
 			}
-			vl := id.lines[j]
+			vl := id.lines.Line(j)
 			sb.WriteString(vl.line)
 			if vl.hasNewline {
 				sb.WriteRune('\n')
@@ -170,7 +217,7 @@ func (id *IndexedData) LineMatches(i int, query string) bool {
 }
 
 func (id *IndexedData) VisibleLines() int {
-	return len(id.lines)
+	return id.lines.Size()
 }
 
 func (id *IndexedData) Resize(width int) {
@@ -179,28 +226,30 @@ func (id *IndexedData) Resize(width int) {
 	}
 	id.width = width
 
+	newLines := NewIndexedLines(id.lines.maxQuery)
+	defer newLines.FinishAddLine()
+
 	readC := make(chan string)
 	resultC := make(chan visibleLine)
 	go generateVisibleLines(width, readC, resultC)
 
 	doneC := make(chan bool)
-	newLines := make([]visibleLine, 0, len(id.lines))
 	go func() {
 		for result := range resultC {
-			newLines = append(newLines, result)
+			newLines.AddLine(result)
 		}
 		doneC <- true
 	}()
 
-	for i := 0; i < len(id.lines); i++ {
-		vl := id.lines[i]
+	for i := 0; i < id.lines.Size(); i++ {
+		vl := id.lines.Line(i)
 		if vl.hasNewline {
 			readC <- vl.line + "\n"
 		} else {
 			readC <- vl.line
 		}
 		// Try to save some memory.
-		id.lines[i] = visibleLine{}
+		id.lines.Clear(i)
 	}
 	close(readC)
 	<-doneC

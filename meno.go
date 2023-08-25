@@ -8,6 +8,10 @@ import (
 	"github.com/ewaters/meno/data"
 )
 
+var (
+	maxQuery = flag.Int("max_query", 10, "Limit the size of the index by supporting indexed queries only up to this length. Anything longer will resort to brute force searching.")
+)
+
 func main() {
 	flag.Parse()
 	path := flag.Arg(0)
@@ -18,7 +22,7 @@ func main() {
 	}
 	defer inFile.Close()
 
-	m, err := data.NewMeno(inFile)
+	m, err := data.NewMeno(inFile, *maxQuery)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -15,9 +15,11 @@ type searchTest struct {
 }
 
 type basicTest struct {
-	width int
-	input string
-	want  []string
+	width    int
+	input    string
+	resize   int
+	want     []string
+	maxQuery int
 }
 
 func (bt basicTest) indexedData(t *testing.T) *IndexedData {
@@ -25,10 +27,17 @@ func (bt basicTest) indexedData(t *testing.T) *IndexedData {
 	if bt.width == 0 {
 		bt.width = 15
 	}
+	if bt.maxQuery == 0 {
+		bt.maxQuery = 5
+	}
 	r := strings.NewReader(bt.input)
-	id := NewIndexedData(r, bt.width)
+	id := NewIndexedData(r, bt.width, bt.maxQuery)
+	if bt.resize > 0 {
+		id.Resize(bt.resize)
+	}
 	var got []string
-	for _, vl := range id.lines {
+	for i := 0; i < id.lines.Size(); i++ {
+		vl := id.lines.Line(i)
 		line := vl.line
 		if vl.hasNewline {
 			line += "\n"

@@ -61,8 +61,8 @@ func (p *runningSearch) run() {
 			}
 		}
 	} else {
-		p.logf("searching down from %d to %d", p.startFromLine, len(p.data.lines)-1)
-		for i := p.startFromLine; i < len(p.data.lines); i++ {
+		p.logf("searching down from %d to %d", p.startFromLine, p.data.VisibleLines()-1)
+		for i := p.startFromLine; i < p.data.VisibleLines(); i++ {
 			if !keepGoing(i) {
 				break
 			}

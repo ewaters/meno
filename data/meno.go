@@ -26,6 +26,7 @@ type Meno struct {
 
 	w, h      int
 	firstLine int
+	maxQuery  int
 	data      *IndexedData
 
 	mode Mode
@@ -49,7 +50,7 @@ func (m *Meno) Close() {
 	}
 }
 
-func NewMeno(inFile *os.File) (*Meno, error) {
+func NewMeno(inFile *os.File, maxQuery int) (*Meno, error) {
 	s, err := tcell.NewScreen()
 	if err != nil {
 		return nil, err
@@ -66,6 +67,8 @@ func NewMeno(inFile *os.File) (*Meno, error) {
 		quitC:         make(chan struct{}),
 		eventC:        make(chan tcell.Event),
 		searchResultC: make(chan searchResult),
+
+		maxQuery: maxQuery,
 	}
 	s.SetStyle(m.style)
 	s.Clear()
@@ -325,7 +328,7 @@ func (m *Meno) resized() {
 
 	if m.data == nil {
 		m.logf("Starting scan of input file")
-		m.data = NewIndexedData(m.inFile, m.w)
+		m.data = NewIndexedData(m.inFile, m.w, m.maxQuery)
 		m.logf("Have %d visible lines", m.data.VisibleLines())
 	} else {
 		m.logf("Window resized to %dx%d - (re)building data", m.w, m.h)
@@ -343,7 +346,7 @@ func (m *Meno) showScreen() {
 	lastRow := m.h - 1
 
 	for i := m.firstLine; i < m.data.VisibleLines(); i++ {
-		vline := m.data.lines[i]
+		vline := m.data.lines.Line(i)
 		col := 0
 		for _, r := range []rune(vline.line) {
 			m.screen.SetContent(col, row, r, nil, m.style)
