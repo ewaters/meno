@@ -41,7 +41,7 @@ type Meno struct {
 	lastSearchInput []rune
 	lastSearchMode  Mode
 
-	activeSearch *runningSearch
+	activeSearch *SearchRequest
 }
 
 func (m *Meno) Close() {
@@ -262,17 +262,28 @@ func (m *Meno) startSearch(oppositeDirection bool) {
 		startFromLine = m.firstLine - 1
 	}
 
-	m.activeSearch = &runningSearch{
-		query:         string(m.searchInput),
-		data:          m.data,
-		resultC:       m.searchResultC,
-		quitC:         m.quitActiveSearchC,
-		startFromLine: startFromLine,
-		searchUp:      mode == ModeSearchUp,
-		maxResults:    1,
-		logf:          m.logf,
+	resultC := make(chan searchResult)
+
+	req := SearchRequest{
+		Query:         string(m.searchInput),
+		ResultC:       resultC,
+		QuitC:         m.quitActiveSearchC,
+		StartFromLine: startFromLine,
+		SearchUp:      mode == ModeSearchUp,
+		MaxResults:    1,
+		Logf:          m.logf,
 	}
-	go m.activeSearch.run()
+	go m.data.Search(req)
+	m.activeSearch = &req
+
+	go func() {
+		for result := range resultC {
+			m.searchResultC <- result
+		}
+		m.searchResultC <- searchResult{
+			finished: true,
+		}
+	}()
 }
 
 func (m *Meno) updateSearch(input []rune) {
