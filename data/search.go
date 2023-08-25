@@ -40,6 +40,45 @@ func NewSearchRequest(query string) SearchRequest {
 }
 
 func (id *IndexedData) Search(req SearchRequest) {
+	l := len(req.Query)
+	// The query must be at least as long as the trigram size to use the index.
+	if l < 3 || l > id.lines.maxQuery {
+		id.bruteForceSearch(req)
+	} else {
+		id.indexedSearch(req)
+	}
+
+	close(req.ResultC)
+}
+
+func (id *IndexedData) indexedSearch(req SearchRequest) {
+	id.Logf("indexedSearch(%q)", req.Query)
+	returned, max := 0, req.MaxResults
+	skipLines := func(i int) bool {
+		if req.SearchUp {
+			if i >= req.StartFromLine {
+				return true
+			}
+		} else {
+			if i <= req.StartFromLine {
+				return true
+			}
+		}
+		return false
+	}
+	for _, i := range id.lines.LinesMatching(req.Query, skipLines) {
+		req.ResultC <- searchResult{
+			query:      req.Query,
+			lineNumber: i,
+		}
+		returned++
+		if max > 0 && returned >= max {
+			break
+		}
+	}
+}
+
+func (id *IndexedData) bruteForceSearch(req SearchRequest) {
 	returned, max := 0, req.MaxResults
 
 	keepGoing := func(i int) bool {
@@ -49,7 +88,7 @@ func (id *IndexedData) Search(req SearchRequest) {
 		default:
 		}
 
-		if !id.LineMatches(i, req.Query) {
+		if !id.lines.LineMatches(i, req.Query) {
 			return true
 		}
 
@@ -79,6 +118,4 @@ func (id *IndexedData) Search(req SearchRequest) {
 			}
 		}
 	}
-
-	close(req.ResultC)
 }

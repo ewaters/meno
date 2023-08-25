@@ -3,6 +3,7 @@ package data
 import (
 	"io"
 	"log"
+	"sort"
 	"strings"
 
 	"github.com/ewaters/meno/trigram"
@@ -18,6 +19,7 @@ type IndexedLines struct {
 	vl       []visibleLine
 	index    *trigram.Index
 	maxQuery int
+	Logf     func(string, ...interface{})
 }
 
 // NewIndexedLines takes a max query value which indicates how long of a query
@@ -28,20 +30,91 @@ func NewIndexedLines(maxQuery int) *IndexedLines {
 	return &IndexedLines{
 		index:    trigram.NewIndex(),
 		maxQuery: maxQuery,
+		Logf:     func(string, ...interface{}) {},
 	}
 }
 
 // AddLine will add and index the passed line. You must call FinishAddLine() once
 // you're done adding lines.
 func (il *IndexedLines) AddLine(vl visibleLine) {
-	il.vl = append(il.vl, vl)
-
 	i := len(il.vl)
+	il.vl = append(il.vl, vl)
 	il.index.AddWithID(vl.line, uint64(i))
 }
 
 // FinishAddLine will complete any remaining processing.
 func (il *IndexedLines) FinishAddLine() {
+}
+
+func (il *IndexedLines) LineMatches(i int, query string) bool {
+	if i < 0 || i > il.Size()-1 {
+		log.Fatalf("LineMatches(%d, %q) called with out-of-bounds index", i, query)
+	}
+	vline := il.vl[i]
+
+	// If the line contains the query, great!
+	if strings.Contains(vline.line, query) {
+		return true
+	}
+
+	// Otherwise, concatenate a suffix to the string to see if the query
+	// *starts* on the lineNumber i but isn't *entirely* on that line.
+
+	suffix := ""
+	{
+		var sb strings.Builder
+		j := i + 1
+		for sb.Len() < len(query) {
+			if j > il.Size()-1 {
+				break
+			}
+			vl := il.vl[j]
+			sb.WriteString(vl.line)
+			if vl.hasNewline {
+				sb.WriteRune('\n')
+			}
+			j++
+		}
+		suffix = sb.String()
+		//p.logf("doSearch fetched %d suffix lines", j-i)
+	}
+
+	// However, if this suffix entirely has the query, then we return
+	// false since line 'i' doesn't contain it.
+	if strings.Contains(suffix, query) {
+		return false
+	}
+
+	var final strings.Builder
+	final.WriteString(vline.line)
+	if vline.hasNewline {
+		final.WriteRune('\n')
+	}
+
+	il.Logf("LineMatches(%d, %q) against %q + %q", i, query, final.String(), suffix)
+	final.WriteString(suffix)
+
+	return strings.Contains(final.String(), query)
+}
+
+func (il *IndexedLines) LinesMatching(query string, skipLine func(int) bool) []int {
+	il.Logf("LinesMatching(%q)", query)
+	var result []int
+	for _, qr := range il.index.Query(query) {
+		idx := int(qr.DocID)
+		if skipLine != nil && skipLine(idx) {
+			il.Logf("  LinesMatching: skipping line %d", idx)
+			continue
+		}
+		if !il.LineMatches(idx, query) {
+			il.Logf("  LinesMatching: line %d doesn't match", idx)
+			continue
+		}
+		il.Logf("  LinesMatching: line %d DOES match", idx)
+		result = append(result, idx)
+	}
+	sort.Ints(result)
+	return result
 }
 
 func (il *IndexedLines) Size() int {
@@ -60,13 +133,16 @@ func (il *IndexedLines) Clear(idx int) {
 type IndexedData struct {
 	lines *IndexedLines
 	width int
+	Logf  func(string, ...interface{})
 }
 
-func NewIndexedData(inFile io.Reader, width int, maxQuery int) *IndexedData {
+func NewIndexedData(inFile io.Reader, width int, maxQuery int, logf func(string, ...interface{})) *IndexedData {
 	id := &IndexedData{
-		lines: NewIndexedLines(maxQuery),
 		width: width,
+		Logf:  logf,
 	}
+	id.lines = NewIndexedLines(maxQuery)
+	id.lines.Logf = logf
 	defer id.lines.FinishAddLine()
 
 	readC := make(chan string)
@@ -163,59 +239,6 @@ type visibleLine struct {
 	hasNewline bool
 }
 
-func (id *IndexedData) LineMatches(i int, query string) bool {
-	if i < 0 || i > id.lines.Size()-1 {
-		log.Fatalf("LineMatches(%d, %q) called with out-of-bounds index", i, query)
-	}
-	vline := id.lines.Line(i)
-
-	// If the line contains the query, great!
-	if strings.Contains(vline.line, query) {
-		return true
-	}
-
-	// Otherwise, concatenate a suffix to the string to see if the query
-	// *starts* on the lineNumber i but isn't *entirely* on that line.
-
-	suffix := ""
-	{
-		var sb strings.Builder
-		j := i + 1
-		for sb.Len() < len(query) {
-			if j > id.lines.Size()-1 {
-				break
-			}
-			vl := id.lines.Line(j)
-			sb.WriteString(vl.line)
-			if vl.hasNewline {
-				sb.WriteRune('\n')
-			}
-			j++
-		}
-		suffix = sb.String()
-		//p.logf("doSearch fetched %d suffix lines", j-i)
-	}
-
-	// However, if this suffix entirely has the query, then we return
-	// false since line 'i' doesn't contain it.
-	if strings.Contains(suffix, query) {
-		return false
-	}
-
-	var final strings.Builder
-	final.WriteString(vline.line)
-	if vline.hasNewline {
-		final.WriteRune('\n')
-	}
-
-	if enableLogger {
-		log.Printf("LineMatches(%d, %q) against %q + %q", i, query, final.String(), suffix)
-	}
-	final.WriteString(suffix)
-
-	return strings.Contains(final.String(), query)
-}
-
 func (id *IndexedData) VisibleLines() int {
 	return id.lines.Size()
 }
@@ -227,6 +250,7 @@ func (id *IndexedData) Resize(width int) {
 	id.width = width
 
 	newLines := NewIndexedLines(id.lines.maxQuery)
+	newLines.Logf = id.lines.Logf
 	defer newLines.FinishAddLine()
 
 	readC := make(chan string)

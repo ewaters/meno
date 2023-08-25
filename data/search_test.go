@@ -31,7 +31,10 @@ func (bt basicTest) indexedData(t *testing.T) *IndexedData {
 		bt.maxQuery = 5
 	}
 	r := strings.NewReader(bt.input)
-	id := NewIndexedData(r, bt.width, bt.maxQuery)
+	logf := func(fmt string, args ...interface{}) {
+		t.Logf(fmt, args...)
+	}
+	id := NewIndexedData(r, bt.width, bt.maxQuery, logf)
 	if bt.resize > 0 {
 		id.Resize(bt.resize)
 	}

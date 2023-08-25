@@ -130,7 +130,7 @@ func TestLineMatches(t *testing.T) {
 	} {
 		id := tc.indexedData(t)
 		for _, mt := range tc.matchTest {
-			got := id.LineMatches(mt.line, mt.query)
+			got := id.lines.LineMatches(mt.line, mt.query)
 			if got != mt.want {
 				t.Errorf("LineMatches(%d, %q): got %v, want %v", mt.line, mt.query, got, mt.want)
 			}

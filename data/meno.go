@@ -276,6 +276,8 @@ func (m *Meno) startSearch(oppositeDirection bool) {
 	go m.data.Search(req)
 	m.activeSearch = &req
 
+	// TODO: Remove this once we have a proper event loop for running
+	// operations.
 	go func() {
 		for result := range resultC {
 			m.searchResultC <- result
@@ -339,7 +341,7 @@ func (m *Meno) resized() {
 
 	if m.data == nil {
 		m.logf("Starting scan of input file")
-		m.data = NewIndexedData(m.inFile, m.w, m.maxQuery)
+		m.data = NewIndexedData(m.inFile, m.w, m.maxQuery, m.logf)
 		m.logf("Have %d visible lines", m.data.VisibleLines())
 	} else {
 		m.logf("Window resized to %dx%d - (re)building data", m.w, m.h)
