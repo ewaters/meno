@@ -107,6 +107,24 @@ type chanRequest struct {
 	respC chan chanResponse
 }
 
+func (cr chanRequest) String() string {
+	var sb strings.Builder
+	sb.WriteString("chanRequest ")
+	if r := len(cr.bytesRead); r > 0 {
+		fmt.Fprintf(&sb, "bytesRead len %d", r)
+	}
+	if cr.readDone {
+		sb.WriteString("read done")
+	}
+	if id := cr.getBlock; id != nil {
+		fmt.Fprintf(&sb, "get block %d", *id)
+	}
+	if str := cr.blockIDsContaining; str != nil {
+		fmt.Fprintf(&sb, "block IDs containing %q", *str)
+	}
+	return sb.String()
+}
+
 // A response from the internal Run() event loop, passed to chanRequest.respC
 type chanResponse struct {
 	// getBlock
@@ -165,8 +183,6 @@ func (r *Reader) Run(eventC chan Event) {
 		readStatus.RemainingBytes = -1
 	}
 
-	max := 10
-
 	newBlock := func(buf, next []byte) {
 		readStatus.BytesRead += len(buf)
 		if readStatus.RemainingBytes > 0 {
@@ -192,10 +208,6 @@ func (r *Reader) Run(eventC chan Event) {
 	}
 
 	for req := range r.reqC {
-		max--
-		if max <= 0 {
-			break
-		}
 		log.Printf("Got req %v", req)
 		if req.bytesRead != nil {
 			pendingBytes = append(pendingBytes, req.bytesRead...)
@@ -232,6 +244,7 @@ func (r *Reader) Run(eventC chan Event) {
 				}
 				resp.blockIDs = append(resp.blockIDs, id)
 			}
+			log.Printf("Sending resp %v", resp)
 			req.respC <- resp
 			continue
 		}
@@ -246,26 +259,28 @@ func (r *Reader) blockIDContains(id int, blocks []*Block, query string) bool {
 	if id < len(blocks)-1 {
 		sb.Write(blocks[id+1].Bytes[:r.IndexNextBytes])
 	}
+	// log.Printf("blockIDContains(%d, %q) checking %q", id, query, sb.String())
 	return strings.Contains(sb.String(), query)
 }
 
-func (r *Reader) GetBlock(id int) (*Block, error) {
+func (r *Reader) sendRequest(req chanRequest) chanResponse {
 	respC := make(chan chanResponse, 1)
-	r.reqC <- chanRequest{
+	req.respC = respC
+	r.reqC <- req
+	return <-respC
+}
+
+func (r *Reader) GetBlock(id int) (*Block, error) {
+	resp := r.sendRequest(chanRequest{
 		getBlock: &id,
-		respC:    respC,
-	}
-	resp := <-respC
+	})
 	return resp.block, resp.err
 }
 
 func (r *Reader) BlockIDsContaining(query string) ([]int, error) {
-	respC := make(chan chanResponse, 1)
-	r.reqC <- chanRequest{
+	resp := r.sendRequest(chanRequest{
 		blockIDsContaining: &query,
-		respC:              respC,
-	}
-	resp := <-respC
+	})
 	return resp.blockIDs, resp.err
 }
 
