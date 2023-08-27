@@ -66,27 +66,64 @@ func TestGenerateVisibleLines(t *testing.T) {
 	blockC := make(chan blocks.Block)
 	lineC := make(chan visibleLine, 10)
 
+	assertNextLine := func(want visibleLine) {
+		got := <-lineC
+		if got.String() != want.String() {
+			t.Errorf("\n got %v\nwant %v", got, want)
+		}
+	}
+
 	const width = 5
 
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
-		generateVisibleLines(width, blockC, lineC)
+		generateVisibleLines([]byte("\n"), width, blockC, lineC)
 		wg.Done()
 	}()
 
 	blockC <- blocks.Block{
-		ID:    0,
+		ID: 0,
+		//             01234567
 		Bytes: []byte("abcdefgh"),
 	}
-	got := <-lineC
-	want := visibleLine{
-		loc:        blockRange(0, 0, 0, 4),
-		hasNewline: false,
+	assertNextLine(visibleLine{
+		loc:             blockRange(0, 0, 0, 4), // "abcde"
+		endsWithLineSep: false,
+	})
+
+	// Make sure that there's no other line coming yet.
+	select {
+	case got := <-lineC:
+		t.Fatalf("There shouldn't be another line; got %v", got)
+	default:
 	}
 
-	if got.String() != want.String() {
-		t.Errorf("First visible line\n got %v\nwant %v", got, want)
+	// Send another block.
+	blockC <- blocks.Block{
+		ID: 1,
+		//             01 2345678
+		Bytes: []byte("i\n1234567"),
+	}
+
+	assertNextLine(visibleLine{
+		loc:             blockRange(0, 5, 1, 1), // "fghi\n"
+		endsWithLineSep: true,
+	})
+
+	close(blockC)
+
+	assertNextLine(visibleLine{
+		loc:             blockRange(1, 2, 1, 6), // "12345",
+		endsWithLineSep: false,
+	})
+	assertNextLine(visibleLine{
+		loc:             blockRange(1, 7, 1, 8), // "67",
+		endsWithLineSep: false,
+	})
+
+	for line := range lineC {
+		t.Errorf("Got %v", line)
 	}
 
 	wg.Wait()

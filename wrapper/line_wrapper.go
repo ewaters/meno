@@ -1,9 +1,9 @@
 package wrapper
 
 import (
+	"bytes"
 	"fmt"
 	"log"
-	"strings"
 
 	"github.com/ewaters/meno/blocks"
 )
@@ -23,16 +23,16 @@ func newLineWrapper(width int) *lineWrapper {
 }
 
 type visibleLine struct {
-	loc        blocks.BlockIDOffsetRange
-	hasNewline bool
+	loc             blocks.BlockIDOffsetRange
+	endsWithLineSep bool
 }
 
 func (vl visibleLine) String() string {
-	return fmt.Sprintf("loc %v, has newline %v", vl.loc, vl.hasNewline)
+	return fmt.Sprintf("loc %v, ends with line sep %v", vl.loc, vl.endsWithLineSep)
 }
 
-func generateVisibleLines(width int, inC chan blocks.Block, outC chan visibleLine) {
-	var leftOver string
+func generateVisibleLines(lineSep []byte, width int, inC chan blocks.Block, outC chan visibleLine) {
+	var leftOver []byte
 	var leftOverStart blocks.BlockIDOffset
 
 	endsWithNewline := false
@@ -45,21 +45,28 @@ func generateVisibleLines(width int, inC chan blocks.Block, outC chan visibleLin
 			BlockID: block.ID,
 			Offset:  0,
 		}
-		if leftOver != "" {
+		if len(leftOver) > 0 {
 			start = leftOverStart
 		}
 		end := blocks.BlockIDOffset{
 			BlockID: block.ID,
-			Offset:  0,
+			Offset:  0 - len(leftOver),
+		}
+		if enableLogger {
+			log.Printf("reset start: %v, end: %v", start, end)
 		}
 
-		part := string(block.Bytes)
-		lines := strings.Split(leftOver+part, "\n")
+		combined := append(leftOver, block.Bytes...)
+		lines := bytes.Split(combined, lineSep)
 		if enableLogger {
-			log.Printf("Read %q, have lines %q", part, lines)
+			var linesStr []string
+			for _, line := range lines {
+				linesStr = append(linesStr, string(line))
+			}
+			log.Printf("Block [%d] %q, have lines %q", block.ID, string(block.Bytes), linesStr)
 		}
-		leftOver = ""
-		endsWithNewline = part[len(part)-1] == '\n'
+		leftOver = nil
+		endsWithNewline = bytes.HasSuffix(combined, lineSep)
 		if endsWithNewline {
 			// The last element in the lines list is an empty string; let's
 			// pop it.
@@ -71,40 +78,65 @@ func generateVisibleLines(width int, inC chan blocks.Block, outC chan visibleLin
 			lastLine := i == len(lines)-1
 			for len(line) > width {
 				//part := line[:width]
-				end.Offset += width
-				line = line[width:]
-				outC <- visibleLine{
+				end.Offset += width - 1
+				vl := visibleLine{
 					// line:       part,
 					loc: blocks.BlockIDOffsetRange{
 						Start: start,
 						End:   end,
 					},
-					hasNewline: false,
+					endsWithLineSep: false,
+				}
+				if enableLogger {
+					log.Printf("line: %q, sending vl %v (wrapped)", string(line[:width]), vl)
+				}
+				outC <- vl
+				line = line[width:]
+				end.Offset++
+				start = end
+				if enableLogger {
+					log.Printf("start: %v, end: %v", start, end)
 				}
 			}
 			if !lastLine || endsWithNewline {
-				outC <- visibleLine{
-					//line:       line,
+				end.Offset += len(line) - 1 + len(lineSep)
+				vl := visibleLine{
 					loc: blocks.BlockIDOffsetRange{
 						Start: start,
 						End:   end,
 					},
-					hasNewline: true,
+					endsWithLineSep: true,
+				}
+				if enableLogger {
+					log.Printf("line: %q, sending vl %v", string(line), vl)
+				}
+				outC <- vl
+				end.Offset++
+				start = end
+				if enableLogger {
+					log.Printf("start: %v, end: %v", start, end)
 				}
 			} else {
 				leftOver = line
+				leftOverStart = start
 			}
 		}
 	}
 	if len(leftOver) > 0 {
-		outC <- visibleLine{
+		end := leftOverStart
+		end.Offset += len(leftOver) - 1
+		vl := visibleLine{
 			//line:       leftOver,
 			loc: blocks.BlockIDOffsetRange{
-				//Start: start,
-				//End:   end,
+				Start: leftOverStart,
+				End:   end,
 			},
-			hasNewline: endsWithNewline,
+			endsWithLineSep: endsWithNewline,
 		}
+		if enableLogger {
+			log.Printf("leftover line: %q, sending vl %v", string(leftOver), vl)
+		}
+		outC <- vl
 	}
 	close(outC)
 }
