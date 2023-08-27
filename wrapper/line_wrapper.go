@@ -28,6 +28,10 @@ func (ls *lineSubscription) lineWanted(idx int) bool {
 	return true
 }
 
+type wrapEvent struct {
+	lines int
+}
+
 type lineWrapper struct {
 	width   int
 	lineSep []byte
@@ -48,7 +52,7 @@ func newLineWrapper(width int, lineSep []byte) *lineWrapper {
 }
 
 // Runs until Stop is called. Make sure to close blockC before calling stop.
-func (lw *lineWrapper) Run(blockC chan blocks.Block) {
+func (lw *lineWrapper) Run(blockC chan blocks.Block, eventC chan wrapEvent) {
 	lineC := make(chan visibleLine)
 
 	var lines []visibleLine
@@ -74,6 +78,12 @@ outer:
 				log.Printf("got line %v", line)
 			}
 			lines = append(lines, line)
+			// Not sure if this is a good idea or not.
+			if eventC != nil {
+				eventC <- wrapEvent{
+					lines: len(lines),
+				}
+			}
 
 			for _, sub := range subsByID {
 				if !sub.lineWanted(line.number) {
@@ -90,28 +100,41 @@ outer:
 			resp := chanResponse{}
 			if req.lineCount {
 				resp.lineCount = len(lines)
-			} else if sub := req.newSub; sub != nil {
+				req.respC <- resp
+				continue
+			}
+			if sub := req.newSub; sub != nil {
 				id := lastSubID
 				lastSubID++
+				subsByID[id] = sub
+				resp.subID = id
+				// We must write the response before backfilling the
+				// subscription so the caller can sequence the two calls one
+				// after the other.
+				req.respC <- resp
+
 				for i := sub.from; i < len(lines); i++ {
 					if sub.to > -1 && i > sub.to {
 						break
 					}
 					sub.respC <- lines[i]
 				}
-				subsByID[id] = sub
-				resp.subID = id
-			} else if id := req.cancelSub; id != nil {
+				continue
+			}
+			if id := req.cancelSub; id != nil {
 				sub, ok := subsByID[*id]
 				if !ok {
 					resp.err = fmt.Errorf("Invalid subscription id %d", *id)
-				} else {
-					close(sub.respC)
-					delete(subsByID, *id)
+					req.respC <- resp
+					continue
 				}
-			} else {
-				resp.err = fmt.Errorf("Unhandled req %v", req)
+
+				close(sub.respC)
+				delete(subsByID, *id)
+				req.respC <- resp
+				continue
 			}
+			resp.err = fmt.Errorf("Unhandled req %v", req)
 			req.respC <- resp
 		}
 	}
@@ -166,6 +189,12 @@ func (lw *lineWrapper) LineCount() int {
 	return resp.lineCount
 }
 
+// SubscribeLines returns all the lines that have a number (0-based) from `from`
+// (inclusive) to `to` (inclusive). If `to` is -1, all lines past `from` are
+// returned. Returns a subscription ID.
+//
+// The caller should not close `lineC` but instead call `CancelSubscription`
+// with the returned subscription ID, which will close `lineC`.
 func (lw *lineWrapper) SubscribeLines(from, to int, lineC chan visibleLine) (int, error) {
 	if from < 0 || (to > -1 && from > to) {
 		return 0, fmt.Errorf("Invalid subscription from %d to %d", from, to)
@@ -243,7 +272,7 @@ func generateVisibleLines(lineSep []byte, width int, blockC chan blocks.Block, l
 		for i := 0; i < len(lines); i++ {
 			line := lines[i]
 			lastLine := i == len(lines)-1
-			for len(line) > width {
+			for len(line) >= width {
 				//part := line[:width]
 				end.Offset += width - 1
 				vl := visibleLine{

@@ -28,18 +28,46 @@ func (w *Wrapper) Run() {
 	go w.reader.Run(w.blockEventC)
 
 	blockC := make(chan blocks.Block)
-	go w.lineWrap.Run(blockC)
+	go w.lineWrap.Run(blockC, nil)
+
+	{
+		lineC := make(chan visibleLine)
+		_, err := w.lineWrap.SubscribeLines(0, -1, lineC)
+		if err != nil {
+			log.Fatalf("SubscribeLines(): %v", err)
+		}
+		go func() {
+			for line := range lineC {
+				//log.Printf("Wrapper got line %v", line)
+				buf, err := w.reader.GetBytes(line.loc)
+				if err != nil {
+					log.Fatalf("GetBytes(%v): %v", line.loc, err)
+				}
+				log.Printf("Line #%d %q", line.number, string(buf))
+			}
+			log.Printf("lineC was closed")
+		}()
+	}
+
+	blockClosed := false
 
 outer:
 	for {
 		select {
 		case <-w.quitC:
-			close(blockC)
+			if !blockClosed {
+				close(blockC)
+			}
 			break outer
-		case event := <-w.blockEventC:
-			log.Printf("Got event %v", event)
-			if event.NewBlock != nil {
-				blockC <- *event.NewBlock
+		case blockEvent := <-w.blockEventC:
+			log.Printf("Got block event %v", blockEvent)
+			if blockEvent.NewBlock != nil {
+				blockC <- *blockEvent.NewBlock
+			}
+			if blockEvent.Status.RemainingBytes == 0 {
+				log.Printf("Closing blockC since no remaining bytes")
+				close(blockC)
+				blockClosed = true
 			}
 		}
 	}

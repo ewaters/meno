@@ -1,12 +1,18 @@
 package wrapper
 
 import (
+	"log"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ewaters/meno/blocks"
 )
+
+func init() {
+	log.SetFlags(log.Lmicroseconds | log.Lshortfile)
+}
 
 func blockRange(b1, o1, b2, o2 int) blocks.BlockIDOffsetRange {
 	return blocks.BlockIDOffsetRange{
@@ -37,8 +43,6 @@ func newReader(t *testing.T, input string) *blocks.Reader {
 }
 
 func TestWrapper(t *testing.T) {
-	return
-
 	defer func(prev bool) { enableLogger = prev }(enableLogger)
 	enableLogger = true
 
@@ -64,6 +68,7 @@ func TestWrapper(t *testing.T) {
 			}
 	*/
 
+	time.Sleep(100 * time.Millisecond)
 	w.Stop()
 }
 
@@ -74,7 +79,7 @@ func TestLineWrapper(t *testing.T) {
 	blockC := make(chan blocks.Block)
 
 	lw := newLineWrapper(5, []byte("\n"))
-	go lw.Run(blockC)
+	go lw.Run(blockC, nil)
 
 	blockC <- blocks.Block{
 		ID:    0,
@@ -93,14 +98,14 @@ func TestLineWrapper(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
-		for line := range lineC {
-			t.Logf("Got line %v", line)
+		for range lineC {
+			//t.Logf("Got line %v", line)
 			gotLines++
 			if gotLines == wantLines {
 				// Have the lineWrapper close lineC and clean up the
 				// subscription.
 				if err := lw.CancelSubscription(subID); err != nil {
-					t.Fatalf("Failed to cancel subscription %d: %v", subID, err)
+					log.Fatalf("Failed to cancel subscription %d: %v", subID, err)
 				}
 			}
 		}
@@ -187,6 +192,72 @@ func TestGenerateVisibleLines(t *testing.T) {
 	assertNextLine(visibleLine{
 		loc:             blockRange(1, 7, 1, 8), // "67",
 		endsWithLineSep: false,
+	})
+
+	for line := range lineC {
+		t.Errorf("Got %v", line)
+	}
+
+	wg.Wait()
+}
+
+func TestGenerateVisibleLinesBlocksSameSizeAsWidth(t *testing.T) {
+	defer func(prev bool) { enableLogger = prev }(enableLogger)
+	enableLogger = false
+
+	blockC := make(chan blocks.Block)
+	lineC := make(chan visibleLine, 10)
+
+	assertNextLine := func(want visibleLine) {
+		got := <-lineC
+		if got.String() != want.String() {
+			t.Errorf("\n got %v\nwant %v", got, want)
+		}
+	}
+
+	const width = 5
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		generateVisibleLines([]byte("\n"), width, blockC, lineC)
+		wg.Done()
+	}()
+
+	blockC <- blocks.Block{
+		ID: 0,
+		//             01234
+		Bytes: []byte("abcde"),
+	}
+	assertNextLine(visibleLine{
+		loc:             blockRange(0, 0, 0, 4), // "abcde"
+		endsWithLineSep: false,
+	})
+
+	// Make sure that there's no other line coming yet.
+	select {
+	case got := <-lineC:
+		t.Fatalf("There shouldn't be another line; got %v", got)
+	default:
+	}
+
+	// Send another block.
+	blockC <- blocks.Block{
+		ID: 1,
+		//             012 34
+		Bytes: []byte("fg\n1\n"),
+	}
+
+	assertNextLine(visibleLine{
+		loc:             blockRange(1, 0, 1, 2), // "fg\n"
+		endsWithLineSep: true,
+	})
+
+	close(blockC)
+
+	assertNextLine(visibleLine{
+		loc:             blockRange(1, 3, 1, 4), // "1\n",
+		endsWithLineSep: true,
 	})
 
 	for line := range lineC {

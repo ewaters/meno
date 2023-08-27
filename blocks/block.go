@@ -1,6 +1,7 @@
 package blocks
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"log"
@@ -56,8 +57,31 @@ func (bio BlockIDOffset) String() string {
 	return fmt.Sprintf("block ID %d offset %d", bio.BlockID, bio.Offset)
 }
 
+func (bio BlockIDOffset) Validate() error {
+	if bio.BlockID < 0 || bio.Offset < 0 {
+		return fmt.Errorf("invalid {%v}", bio)
+	}
+	return nil
+}
+
 type BlockIDOffsetRange struct {
 	Start, End BlockIDOffset
+}
+
+func (bior BlockIDOffsetRange) Validate() error {
+	if bior.Start.BlockID > bior.End.BlockID {
+		return fmt.Errorf("%v: start block ID > end ID", bior)
+	}
+	if bior.Start.BlockID == bior.End.BlockID {
+		from, to := bior.Start.Offset, bior.End.Offset
+		if from > to {
+			return fmt.Errorf("%v: same block offset %d > %d", bior, from, to)
+		}
+	}
+	if err := bior.Start.Validate(); err != nil {
+		return err
+	}
+	return bior.End.Validate()
 }
 
 func (bior BlockIDOffsetRange) String() string {
@@ -127,6 +151,7 @@ type chanRequest struct {
 
 	// GetBlock(id)
 	// GetBlockRange(start, end)
+	// GetBytes()
 	getBlockRange *BlockIDOffsetRange
 
 	// GetLine(idx)
@@ -346,6 +371,31 @@ func (r *Reader) GetBlockRange(from, to int) ([]*Block, error) {
 		},
 	})
 	return resp.blocks, resp.err
+}
+
+func (r *Reader) GetBytes(loc BlockIDOffsetRange) ([]byte, error) {
+	if err := loc.Validate(); err != nil {
+		return nil, err
+	}
+	blocks, err := r.GetBlockRange(loc.Start.BlockID, loc.End.BlockID)
+	if err != nil {
+		return nil, err
+	}
+
+	var bb bytes.Buffer
+	startID, endID := loc.Start.BlockID, loc.End.BlockID
+	for _, block := range blocks {
+		if block.ID == startID && block.ID == endID {
+			bb.Write(block.Bytes[loc.Start.Offset : loc.End.Offset+1])
+		} else if block.ID == startID {
+			bb.Write(block.Bytes[loc.Start.Offset:])
+		} else if block.ID == endID {
+			bb.Write(block.Bytes[:loc.End.Offset+1])
+		} else {
+			bb.Write(block.Bytes)
+		}
+	}
+	return bb.Bytes(), nil
 }
 
 func (r *Reader) BlockIDsContaining(query string) ([]int, error) {
