@@ -28,37 +28,77 @@ func (tc blockIDsContainsTest) run(t *testing.T, r *Reader) {
 	}
 }
 
-func TestReader(t *testing.T) {
-	reader, writer := io.Pipe()
+type harness struct {
+	writer *io.PipeWriter
+	r      *Reader
+}
 
-	send := func(str string) {
-		b := []byte(str)
-		n, err := writer.Write(b)
-		if err != nil {
-			t.Fatalf("Write(%q) failed: %v", str, err)
-		}
-		if n != len(b) {
-			t.Fatalf("Write(%q) wrote %d, expected %d", str, n, len(b))
-		}
+var defaultConfig = Config{
+	BlockSize:      5,
+	IndexNextBytes: 1,
+}
+
+func newHarness(t *testing.T, config Config) *harness {
+	t.Helper()
+
+	reader, writer := io.Pipe()
+	config.Source = ConfigSource{
+		Input: reader,
 	}
 
-	r, err := NewReader(Config{
-		Source: ConfigSource{
-			Input: reader,
-		},
-		BlockSize:      5,
-		IndexNextBytes: 1,
-	})
+	r, err := NewReader(config)
 	if err != nil {
 		t.Fatalf("NewReader(): %v", err)
 	}
 
+	return &harness{
+		writer: writer,
+		r:      r,
+	}
+}
+
+func (h *harness) send(t *testing.T, str string) {
+	t.Helper()
+	b := []byte(str)
+	n, err := h.writer.Write(b)
+	if err != nil {
+		t.Fatalf("Write(%q) failed: %v", str, err)
+	}
+	if n != len(b) {
+		t.Fatalf("Write(%q) wrote %d, expected %d", str, n, len(b))
+	}
+}
+
+func (h *harness) runAndSendOnly(t *testing.T, str string) {
+	t.Helper()
 	eventC := make(chan Event, 1)
 
-	go r.Run(eventC)
-	defer r.Stop()
+	go h.r.Run(eventC)
 
-	send("abc\n123\n")
+	h.send(t, str)
+	h.writer.Close()
+
+	doneC := make(chan bool)
+	go func() {
+		for e := range eventC {
+			if e.Status.RemainingBytes == 0 {
+				break
+			}
+		}
+		doneC <- true
+	}()
+	<-doneC
+}
+
+func TestReader(t *testing.T) {
+	h := newHarness(t, defaultConfig)
+
+	eventC := make(chan Event, 1)
+
+	go h.r.Run(eventC)
+	defer h.r.Stop()
+
+	h.send(t, "abc\n123\n")
 
 	got := <-eventC
 	want := Event{
@@ -79,7 +119,7 @@ func TestReader(t *testing.T) {
 	}
 
 	{
-		block, err := r.GetBlock(0)
+		block, err := h.r.GetBlock(0)
 		if err != nil {
 			t.Errorf("GetBlock(0): %v", err)
 		} else {
@@ -90,7 +130,7 @@ func TestReader(t *testing.T) {
 		}
 	}
 	{
-		_, err := r.GetBlock(1)
+		_, err := h.r.GetBlock(1)
 		if err == nil {
 			t.Errorf("GetBlock(1): expected an error, got no error")
 		}
@@ -100,10 +140,10 @@ func TestReader(t *testing.T) {
 		{"c\n12", []int{}},
 		{"23\n", []int{}},
 	} {
-		tc.run(t, r)
+		tc.run(t, h.r)
 	}
 
-	writer.Close()
+	h.writer.Close()
 
 	got = <-eventC
 	want = Event{
@@ -129,6 +169,65 @@ func TestReader(t *testing.T) {
 		{"c\n12", []int{0}},
 		{"23\n", []int{1}},
 	} {
-		tc.run(t, r)
+		tc.run(t, h.r)
+	}
+}
+
+func TestNewlines(t *testing.T) {
+	h := newHarness(t, defaultConfig)
+	h.runAndSendOnly(t, "abc\n123\n")
+	defer h.r.Stop()
+
+	block, err := h.r.GetBlock(1)
+	if err != nil {
+		t.Fatalf("GetBlock: %v", err)
+	}
+	if got, want := string(block.Bytes), "23\n"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+
+	for _, tc := range []struct {
+		line    int
+		want    *BlockIDOffsetRange
+		wantErr bool
+	}{
+		{0, &BlockIDOffsetRange{BlockIDOffset{0, 0}, BlockIDOffset{0, 3}}, false},
+		{1, &BlockIDOffsetRange{BlockIDOffset{0, 4}, BlockIDOffset{1, 2}}, false},
+		{2, nil, true},
+	} {
+
+		got, err := h.r.GetLine(tc.line)
+		if err != nil {
+			if !tc.wantErr {
+				t.Fatalf("GetLine(%d): got no err, wanted err", tc.line)
+			}
+			continue
+		}
+		if (got == nil) != (tc.want == nil) || got.String() != tc.want.String() {
+			t.Errorf("GetLine(%d): got %v, want %v", tc.line, got, tc.want)
+		}
+	}
+}
+
+func TestGetBlockRange(t *testing.T) {
+	h := newHarness(t, defaultConfig)
+	h.runAndSendOnly(t, "abc\n123\n")
+	defer h.r.Stop()
+
+	blocks, err := h.r.GetBlockRange(0, 1)
+	if err != nil {
+		t.Fatalf("GetBlockRange: %v", err)
+	}
+	wantBlockStr := []string{"abc\n1", "23\n"}
+	if got, want := len(blocks), len(wantBlockStr); got != want {
+		t.Fatalf("GetBlockRange: got len %d, wanted %d", got, want)
+	}
+
+	for i, gotBlock := range blocks {
+		got := string(gotBlock.Bytes)
+		want := wantBlockStr[i]
+		if got != want {
+			t.Errorf("GetBlockRange: [%d] got %q, want %q", i, got, want)
+		}
 	}
 }

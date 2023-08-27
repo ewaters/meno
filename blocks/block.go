@@ -1,7 +1,6 @@
 package blocks
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"log"
@@ -23,7 +22,7 @@ type Config struct {
 
 	// How many bytes should we read into the next block to build the index for
 	// the given block.
-	// Must be < BlockSize.
+	// Must be > 0 and < BlockSize.
 	// This enables us to say that block "abc" contains "bcde" if the next block
 	// contains "def" and IndexNextBytes is at least 2.
 	IndexNextBytes int
@@ -46,6 +45,34 @@ type Block struct {
 
 func (b *Block) String() string {
 	return fmt.Sprintf("block { id %d, bytes %d (%q), newlines %d }", b.ID, len(b.Bytes), string(b.Bytes), b.Newlines)
+}
+
+type BlockIDOffset struct {
+	BlockID int
+	Offset  int
+}
+
+func (bio BlockIDOffset) String() string {
+	return fmt.Sprintf("block ID %d offset %d", bio.BlockID, bio.Offset)
+}
+
+type BlockIDOffsetRange struct {
+	Start, End BlockIDOffset
+}
+
+func (bior BlockIDOffsetRange) String() string {
+	return fmt.Sprintf("%v -> %v", bior.Start, bior.End)
+}
+
+func (b *Block) findNewlines() []BlockIDOffset {
+	var result []BlockIDOffset
+	for i, bite := range b.Bytes {
+		if bite == 10 {
+			result = append(result, BlockIDOffset{b.ID, i})
+		}
+	}
+	b.Newlines = len(result)
+	return result
 }
 
 // The running status of the reading from Input.
@@ -99,7 +126,11 @@ type chanRequest struct {
 	readDone  bool
 
 	// GetBlock(id)
-	getBlock *int
+	// GetBlockRange(start, end)
+	getBlockRange *BlockIDOffsetRange
+
+	// GetLine(idx)
+	getLine *int
 
 	// BlockIDsContaining(string)
 	blockIDsContaining *string
@@ -116,8 +147,11 @@ func (cr chanRequest) String() string {
 	if cr.readDone {
 		sb.WriteString("read done")
 	}
-	if id := cr.getBlock; id != nil {
-		fmt.Fprintf(&sb, "get block %d", *id)
+	if bior := cr.getBlockRange; bior != nil {
+		fmt.Fprintf(&sb, "get block range %v", *bior)
+	}
+	if id := cr.getLine; id != nil {
+		fmt.Fprintf(&sb, "get line %d", *id)
 	}
 	if str := cr.blockIDsContaining; str != nil {
 		fmt.Fprintf(&sb, "block IDs containing %q", *str)
@@ -127,11 +161,14 @@ func (cr chanRequest) String() string {
 
 // A response from the internal Run() event loop, passed to chanRequest.respC
 type chanResponse struct {
-	// getBlock
-	block *Block
+	// getBlockRange
+	blocks []*Block
 
 	// blockIDsContaining
 	blockIDs []int
+
+	// getLine start and end
+	blockIDOffsetRange *BlockIDOffsetRange
 
 	err error
 }
@@ -176,6 +213,7 @@ func (r *Reader) Run(eventC chan Event) {
 	var readStatus ReadStatus
 	var pendingBytes []byte
 	index := trigram.NewIndex()
+	var newlines []BlockIDOffset
 
 	if r.Source.Size > 0 {
 		readStatus.RemainingBytes = r.Source.Size
@@ -190,14 +228,14 @@ func (r *Reader) Run(eventC chan Event) {
 		}
 		id := len(blocks)
 		block := &Block{
-			ID:       id,
-			Bytes:    buf,
-			Newlines: bytes.Count(buf, []byte("\n")),
+			ID:    id,
+			Bytes: buf,
 		}
+		nls := block.findNewlines()
+		newlines = append(newlines, nls...)
 
-		composite := string(buf) + string(next)
-		log.Printf("Indexing %q:%q to %d", string(buf), string(next), id)
-		index.AddWithID(composite, uint64(id))
+		//log.Printf("Indexing %q:%q to %d", string(buf), string(next), id)
+		index.AddWithID(string(buf)+string(next), uint64(id))
 		readStatus.Newlines += block.Newlines
 		readStatus.Blocks++
 		blocks = append(blocks, block)
@@ -208,7 +246,7 @@ func (r *Reader) Run(eventC chan Event) {
 	}
 
 	for req := range r.reqC {
-		log.Printf("Got req %v", req)
+		//log.Printf("Got req %v", req)
 		if req.bytesRead != nil {
 			pendingBytes = append(pendingBytes, req.bytesRead...)
 			block, next := r.BlockSize, r.IndexNextBytes
@@ -225,13 +263,15 @@ func (r *Reader) Run(eventC chan Event) {
 			continue
 		}
 		resp := chanResponse{}
-		if req.getBlock != nil {
-			idx := *req.getBlock
-			if idx >= 0 && idx < len(blocks) {
-				resp.block = blocks[idx]
-			} else {
-				resp.err = fmt.Errorf("Invalid block id %d", idx)
+		if bior := req.getBlockRange; bior != nil {
+			start, end := bior.Start.BlockID, bior.End.BlockID
+			max := len(blocks) - 1
+			if start > end || start < 0 || end < 0 || start > max || end > max {
+				resp.err = fmt.Errorf("Invalid block range: %d -> %d (max %d)", start, end, max)
+				req.respC <- resp
+				continue
 			}
+			resp.blocks = blocks[start : end+1]
 			req.respC <- resp
 			continue
 		}
@@ -244,7 +284,27 @@ func (r *Reader) Run(eventC chan Event) {
 				}
 				resp.blockIDs = append(resp.blockIDs, id)
 			}
-			log.Printf("Sending resp %v", resp)
+			req.respC <- resp
+			continue
+		}
+		if req.getLine != nil {
+			idx := *req.getLine
+			if idx < 0 || idx > len(newlines)-1 {
+				resp.err = fmt.Errorf("Invalid getLine idx %d; can't exceed %d", idx, len(newlines))
+				req.respC <- resp
+				continue
+			}
+
+			start, end := BlockIDOffset{0, 0}, newlines[idx]
+			if idx > 0 {
+				start = newlines[idx-1]
+				start.Offset++
+				if start.Offset > r.BlockSize {
+					start.Offset = 0
+					start.BlockID++
+				}
+			}
+			resp.blockIDOffsetRange = &BlockIDOffsetRange{start, end}
 			req.respC <- resp
 			continue
 		}
@@ -271,10 +331,21 @@ func (r *Reader) sendRequest(req chanRequest) chanResponse {
 }
 
 func (r *Reader) GetBlock(id int) (*Block, error) {
+	blocks, err := r.GetBlockRange(id, id)
+	if len(blocks) != 1 || err != nil {
+		return nil, err
+	}
+	return blocks[0], nil
+}
+
+func (r *Reader) GetBlockRange(from, to int) ([]*Block, error) {
 	resp := r.sendRequest(chanRequest{
-		getBlock: &id,
+		getBlockRange: &BlockIDOffsetRange{
+			BlockIDOffset{from, 0},
+			BlockIDOffset{to, 0},
+		},
 	})
-	return resp.block, resp.err
+	return resp.blocks, resp.err
 }
 
 func (r *Reader) BlockIDsContaining(query string) ([]int, error) {
@@ -282,6 +353,15 @@ func (r *Reader) BlockIDsContaining(query string) ([]int, error) {
 		blockIDsContaining: &query,
 	})
 	return resp.blockIDs, resp.err
+}
+
+// GetLine returns the range of block + offset that contain the bytes of the
+// given line (which is byte range terminated by '\n').
+func (r *Reader) GetLine(idx int) (*BlockIDOffsetRange, error) {
+	resp := r.sendRequest(chanRequest{
+		getLine: &idx,
+	})
+	return resp.blockIDOffsetRange, resp.err
 }
 
 func (r *Reader) Stop() {
