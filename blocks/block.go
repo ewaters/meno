@@ -98,7 +98,7 @@ type Event struct {
 	NewBlock *Block
 
 	// The current read status.
-	Status *ReadStatus
+	Status ReadStatus
 }
 
 func (e Event) String() string {
@@ -106,7 +106,7 @@ func (e Event) String() string {
 	if e.NewBlock != nil {
 		sb.WriteString(e.NewBlock.String())
 	}
-	if e.Status != nil {
+	if e.Status.BytesRead != 0 {
 		if sb.Len() > 0 {
 			sb.WriteString("; ")
 		}
@@ -241,7 +241,7 @@ func (r *Reader) Run(eventC chan Event) {
 		blocks = append(blocks, block)
 		eventC <- Event{
 			NewBlock: block,
-			Status:   &readStatus,
+			Status:   readStatus,
 		}
 	}
 

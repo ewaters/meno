@@ -107,7 +107,7 @@ func TestReader(t *testing.T) {
 			Bytes:    []byte("abc\n1"),
 			Newlines: 1,
 		},
-		Status: &ReadStatus{
+		Status: ReadStatus{
 			BytesRead:      5,
 			Newlines:       1,
 			Blocks:         1,
@@ -152,7 +152,7 @@ func TestReader(t *testing.T) {
 			Bytes:    []byte("23\n"),
 			Newlines: 1,
 		},
-		Status: &ReadStatus{
+		Status: ReadStatus{
 			BytesRead:      8,
 			Newlines:       2,
 			Blocks:         2,
