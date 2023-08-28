@@ -27,6 +27,20 @@ func blockRange(b1, o1, b2, o2 int) blocks.BlockIDOffsetRange {
 	}
 }
 
+func assertSameStrings(t *testing.T, desc string, got, want []string) {
+	t.Helper()
+	if a, b := len(got), len(want); a != b {
+		t.Errorf("%s: got length %d, want %d", desc, a, b)
+		return
+	}
+	for i, a := range got {
+		b := want[i]
+		if a != b {
+			t.Errorf("%s: [%d] got %q, want %q", desc, i, a, b)
+		}
+	}
+}
+
 func newReader(t *testing.T, input string) *blocks.Reader {
 	t.Helper()
 	reader, err := blocks.NewReader(blocks.Config{
@@ -46,30 +60,46 @@ func TestWrapper(t *testing.T) {
 	defer func(prev bool) { enableLogger = prev }(enableLogger)
 	enableLogger = true
 
-	reader := newReader(t, "abcdefg\n1\n2\n3")
-	w, err := New(reader, 5, []byte("\n"))
+	const width = 5
+	const height = 5
+	reader := newReader(t, "abcdefg\n1\n2\n3\n4\n5")
+	w, err := New(reader, width, height, []byte("\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	go w.Run()
+	eventC := make(chan Event)
+	go w.Run(eventC)
 
-	/*
-		want := []string{
-			"abcde",
-			"fg\n",
-			"1\n",
-			"2\n",
-			"3",
+	got := make([]string, height)
+	waitingFor := height
+	for event := range eventC {
+		line := event.Line
+		if line == nil {
+			continue
 		}
+		got[line.Number] = line.Line
+		waitingFor--
+		if waitingFor == 0 {
+			break
+		}
+	}
+	want := []string{"abcde", "fg\n", "1\n", "2\n", "3\n"}
+	assertSameStrings(t, "Lines from event", got, want)
 
-			if got, want := w.LineCount(), len(want); got != want {
-				t.Fatalf("Lines(): got %d, want %d", got, want)
-			}
-	*/
+	// Make sure no more events are queued.
+	time.Sleep(10 * time.Millisecond)
+	select {
+	case event := <-eventC:
+		t.Errorf("There was another event %v, expected none", event)
+	default:
+	}
 
-	time.Sleep(100 * time.Millisecond)
 	w.Stop()
+
+	// TODO: LinesContaining which needs some way to map from block ID to
+	// line numbers.
+
 }
 
 func TestLineWrapper(t *testing.T) {

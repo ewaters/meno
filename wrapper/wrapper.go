@@ -6,25 +6,60 @@ import (
 	"github.com/ewaters/meno/blocks"
 )
 
+type eventFilter struct {
+	topLineNumber int
+	windowHeight  int
+}
+
+func (ef eventFilter) wantLine(num int) bool {
+	if num < ef.topLineNumber || num > ef.topLineNumber+ef.windowHeight-1 {
+		return false
+	}
+	return true
+}
+
 type Wrapper struct {
-	reader      *blocks.Reader
-	lineWrap    *lineWrapper
+	reader   *blocks.Reader
+	lineWrap *lineWrapper
+
+	filter eventFilter
+
 	blockEventC chan blocks.Event
 	quitC       chan bool
 	doneC       chan bool
 }
 
-func New(reader *blocks.Reader, width int, lineSep []byte) (*Wrapper, error) {
+func New(reader *blocks.Reader, width, height int, lineSep []byte) (*Wrapper, error) {
 	return &Wrapper{
-		reader:      reader,
-		lineWrap:    newLineWrapper(width, lineSep),
+		reader:   reader,
+		lineWrap: newLineWrapper(width, lineSep),
+		filter: eventFilter{
+			topLineNumber: 0,
+			windowHeight:  height,
+		},
 		blockEventC: make(chan blocks.Event, 1),
 		quitC:       make(chan bool),
 		doneC:       make(chan bool),
 	}, nil
 }
 
-func (w *Wrapper) Run() {
+type VisibleLine struct {
+	Number int
+	Line   string
+}
+
+type Event struct {
+	Line *VisibleLine
+}
+
+// Run will do the following:
+//
+//  1. Start the passed `blocks.Reader`, reading from the input source.
+//  2. The resulting blocks are passed to a `lineWrapper`, using the `width`
+//     and `lineSep` from `New()` to wrap the blocks.
+//  3. We subscribe to line events from the `lineWrapper` and will deliver
+//     lines that range from [0, `height`) to the passed `eventC`.
+func (w *Wrapper) Run(eventC chan Event) {
 	go w.reader.Run(w.blockEventC)
 
 	blockC := make(chan blocks.Block)
@@ -38,12 +73,20 @@ func (w *Wrapper) Run() {
 		}
 		go func() {
 			for line := range lineC {
+				if !w.filter.wantLine(line.number) {
+					continue
+				}
 				//log.Printf("Wrapper got line %v", line)
 				buf, err := w.reader.GetBytes(line.loc)
 				if err != nil {
 					log.Fatalf("GetBytes(%v): %v", line.loc, err)
 				}
-				log.Printf("Line #%d %q", line.number, string(buf))
+				eventC <- Event{
+					Line: &VisibleLine{
+						Number: line.number,
+						Line:   string(buf),
+					},
+				}
 			}
 			log.Printf("lineC was closed")
 		}()
@@ -71,6 +114,7 @@ outer:
 			}
 		}
 	}
+	close(eventC)
 	w.doneC <- true
 }
 
@@ -79,4 +123,14 @@ func (w *Wrapper) Stop() {
 	<-w.doneC
 
 	w.lineWrap.Stop()
+}
+
+func (w *Wrapper) SetTopLineNumber(newTop int) {
+	if newTop == w.filter.topLineNumber {
+		return
+	}
+	if newTop < 0 {
+		log.Fatalf("SetTopLineNumber(%d) invalid number", newTop)
+	}
+	w.filter.topLineNumber = newTop
 }
