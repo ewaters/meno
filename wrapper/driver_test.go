@@ -1,6 +1,8 @@
 package wrapper
 
 import (
+	"fmt"
+	"io"
 	"log"
 	"strings"
 	"sync"
@@ -56,9 +58,47 @@ func newReader(t *testing.T, input string) *blocks.Reader {
 	return reader
 }
 
+func waitForNLines(d *Driver, waitingFor int) []string {
+	got := make([]string, 0, waitingFor)
+	for event := range d.Events() {
+		line := event.Line
+		if line == nil {
+			continue
+		}
+		got = append(got, line.Line)
+		waitingFor--
+		if waitingFor == 0 {
+			break
+		}
+	}
+	return got
+}
+
+func assertNoEventsWaiting(t *testing.T, d *Driver) {
+	t.Helper()
+	select {
+	case event := <-d.Events():
+		t.Errorf("There was another event %v, expected none", event)
+	default:
+	}
+}
+
+// Watch lines from `from` with height `height`, but stop after receiving
+// `len(want)`. Assert that they equal `want`.
+// Then assert there are no other events waiting.
+func assertWatchedLines(t *testing.T, d *Driver, from, height int, want []string) {
+	t.Helper()
+	if err := d.WatchLines(from, height); err != nil {
+		t.Fatal(err)
+	}
+	got := waitForNLines(d, len(want))
+	assertSameStrings(t, fmt.Sprintf("lines from %d, height %d", from, height), got, want)
+	assertNoEventsWaiting(t, d)
+}
+
 func TestDriver(t *testing.T) {
 	defer func(prev bool) { enableLogger = prev }(enableLogger)
-	enableLogger = true
+	enableLogger = false
 
 	const width = 5
 	const height = 5
@@ -74,27 +114,11 @@ func TestDriver(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	waitForNLines := func(waitingFor int) []string {
-		got := make([]string, 0, height)
-		for event := range d.Events() {
-			line := event.Line
-			if line == nil {
-				continue
-			}
-			got = append(got, line.Line)
-			waitingFor--
-			if waitingFor == 0 {
-				break
-			}
-		}
-		return got
-	}
-
 	{
 		if err := d.WatchLines(0, height); err != nil {
 			t.Fatal(err)
 		}
-		got := waitForNLines(height)
+		got := waitForNLines(d, height)
 		want := []string{"abcde", "fg\n", "1\n", "2\n", "3\n"}
 		assertSameStrings(t, "Lines 0-4", got, want)
 	}
@@ -103,18 +127,14 @@ func TestDriver(t *testing.T) {
 		if err := d.WatchLines(1, height); err != nil {
 			t.Fatal(err)
 		}
-		got := waitForNLines(height)
+		got := waitForNLines(d, height)
 		want := []string{"fg\n", "1\n", "2\n", "3\n", "4\n"}
 		assertSameStrings(t, "Lines 1-5", got, want)
 	}
 
 	// Make sure no more events are queued.
 	time.Sleep(10 * time.Millisecond)
-	select {
-	case event := <-d.Events():
-		t.Errorf("There was another event %v, expected none", event)
-	default:
-	}
+	assertNoEventsWaiting(t, d)
 
 	if err := d.ResizeWindow(10); err != nil {
 		t.Fatal(err)
@@ -123,7 +143,7 @@ func TestDriver(t *testing.T) {
 		if err := d.WatchLines(0, 2); err != nil {
 			t.Fatal(err)
 		}
-		got := waitForNLines(2)
+		got := waitForNLines(d, 2)
 		want := []string{"abcdefg\n", "1\n"}
 		assertSameStrings(t, "Resized lines 0-1", got, want)
 	}
@@ -133,7 +153,55 @@ func TestDriver(t *testing.T) {
 
 	// TODO: LinesContaining which needs some way to map from block ID to
 	// line numbers.
+}
 
+func TestDriverSTDIN(t *testing.T) {
+	defer func(prev bool) { enableLogger = prev }(enableLogger)
+	enableLogger = true
+
+	reader, writer := io.Pipe()
+
+	blockReader, err := blocks.NewReader(blocks.Config{
+		BlockSize:      5,
+		IndexNextBytes: 1,
+		Source: blocks.ConfigSource{
+			Input: reader,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d, err := NewDriver(blockReader, []byte("\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	go d.Run()
+	if err := d.ResizeWindow(5); err != nil {
+		t.Fatal(err)
+	}
+	assertNoEventsWaiting(t, d)
+
+	// This will be split into two blocks: ["abcde", "fg\n"]
+	// Sine the second block is only partial, it will not result in any lines
+	// displayed.
+	writer.Write([]byte("abcdefg\n"))
+
+	// Screen height is 2 but we only get one line.
+	assertWatchedLines(t, d, 0, 2, []string{"abcde"})
+
+	// Resize the window to width of 2. Since the block size is 5, the first
+	// block will be split into two lines.
+	if err := d.ResizeWindow(2); err != nil {
+		t.Fatal(err)
+	}
+	assertNoEventsWaiting(t, d)
+
+	// Screen height is 3 but we only get two lines.
+	assertWatchedLines(t, d, 0, 3, []string{"ab", "cd"})
+
+	writer.Close()
 }
 
 func TestLineWrapper(t *testing.T) {

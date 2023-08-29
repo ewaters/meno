@@ -248,7 +248,7 @@ func generateVisibleLines(lineSep []byte, width int, blockC chan blocks.Block, l
 			BlockID: block.ID,
 			Offset:  0 - len(leftOver),
 		}
-		if enableLogger {
+		if false && enableLogger {
 			log.Printf("reset start: %v, end: %v", start, end)
 		}
 
@@ -290,7 +290,7 @@ func generateVisibleLines(lineSep []byte, width int, blockC chan blocks.Block, l
 				line = line[width:]
 				end.Offset++
 				start = end
-				if enableLogger {
+				if false && enableLogger {
 					log.Printf("start: %v, end: %v", start, end)
 				}
 			}
@@ -309,7 +309,7 @@ func generateVisibleLines(lineSep []byte, width int, blockC chan blocks.Block, l
 				lineC <- vl
 				end.Offset++
 				start = end
-				if enableLogger {
+				if false && enableLogger {
 					log.Printf("start: %v, end: %v", start, end)
 				}
 			} else {
