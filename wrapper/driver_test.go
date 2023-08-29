@@ -63,41 +63,73 @@ func TestDriver(t *testing.T) {
 	const width = 5
 	const height = 5
 	reader := newReader(t, "abcdefg\n1\n2\n3\n4\n5")
-	w, err := NewDriver(reader, width, height, []byte("\n"))
+	d, err := NewDriver(reader, []byte("\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	eventC := make(chan Event)
-	go w.Run(eventC)
+	go d.Run()
 
-	got := make([]string, height)
-	waitingFor := height
-	for event := range eventC {
-		line := event.Line
-		if line == nil {
-			continue
-		}
-		got[line.Number] = line.Line
-		waitingFor--
-		if waitingFor == 0 {
-			break
-		}
+	if err := d.ResizeWindow(width); err != nil {
+		t.Fatal(err)
 	}
-	want := []string{"abcde", "fg\n", "1\n", "2\n", "3\n"}
-	assertSameStrings(t, "Lines from event", got, want)
+
+	waitForNLines := func(waitingFor int) []string {
+		got := make([]string, 0, height)
+		for event := range d.Events() {
+			line := event.Line
+			if line == nil {
+				continue
+			}
+			got = append(got, line.Line)
+			waitingFor--
+			if waitingFor == 0 {
+				break
+			}
+		}
+		return got
+	}
+
+	{
+		if err := d.WatchLines(0, height); err != nil {
+			t.Fatal(err)
+		}
+		got := waitForNLines(height)
+		want := []string{"abcde", "fg\n", "1\n", "2\n", "3\n"}
+		assertSameStrings(t, "Lines 0-4", got, want)
+	}
+
+	{
+		if err := d.WatchLines(1, height); err != nil {
+			t.Fatal(err)
+		}
+		got := waitForNLines(height)
+		want := []string{"fg\n", "1\n", "2\n", "3\n", "4\n"}
+		assertSameStrings(t, "Lines 1-5", got, want)
+	}
 
 	// Make sure no more events are queued.
 	time.Sleep(10 * time.Millisecond)
 	select {
-	case event := <-eventC:
+	case event := <-d.Events():
 		t.Errorf("There was another event %v, expected none", event)
 	default:
 	}
 
-	// TODO: SetTopLineNumber and subscribe
+	if err := d.ResizeWindow(10); err != nil {
+		t.Fatal(err)
+	}
+	{
+		if err := d.WatchLines(0, 2); err != nil {
+			t.Fatal(err)
+		}
+		got := waitForNLines(2)
+		want := []string{"abcdefg\n", "1\n"}
+		assertSameStrings(t, "Resized lines 0-1", got, want)
+	}
 
-	w.Stop()
+	t.Logf("Done testing")
+	d.Stop()
 
 	// TODO: LinesContaining which needs some way to map from block ID to
 	// line numbers.
