@@ -18,7 +18,7 @@ func (ef eventFilter) wantLine(num int) bool {
 	return true
 }
 
-type Wrapper struct {
+type Driver struct {
 	reader   *blocks.Reader
 	lineWrap *lineWrapper
 
@@ -29,8 +29,8 @@ type Wrapper struct {
 	doneC       chan bool
 }
 
-func New(reader *blocks.Reader, width, height int, lineSep []byte) (*Wrapper, error) {
-	return &Wrapper{
+func NewDriver(reader *blocks.Reader, width, height int, lineSep []byte) (*Driver, error) {
+	return &Driver{
 		reader:   reader,
 		lineWrap: newLineWrapper(width, lineSep),
 		filter: eventFilter{
@@ -59,25 +59,25 @@ type Event struct {
 //     and `lineSep` from `New()` to wrap the blocks.
 //  3. We subscribe to line events from the `lineWrapper` and will deliver
 //     lines that range from [0, `height`) to the passed `eventC`.
-func (w *Wrapper) Run(eventC chan Event) {
-	go w.reader.Run(w.blockEventC)
+func (d *Driver) Run(eventC chan Event) {
+	go d.reader.Run(d.blockEventC)
 
 	blockC := make(chan blocks.Block)
-	go w.lineWrap.Run(blockC, nil)
+	go d.lineWrap.Run(blockC, nil)
 
 	{
 		lineC := make(chan visibleLine)
-		_, err := w.lineWrap.SubscribeLines(0, -1, lineC)
+		_, err := d.lineWrap.SubscribeLines(0, -1, lineC)
 		if err != nil {
 			log.Fatalf("SubscribeLines(): %v", err)
 		}
 		go func() {
 			for line := range lineC {
-				if !w.filter.wantLine(line.number) {
+				if !d.filter.wantLine(line.number) {
 					continue
 				}
-				//log.Printf("Wrapper got line %v", line)
-				buf, err := w.reader.GetBytes(line.loc)
+				//log.Printf("Driver got line %v", line)
+				buf, err := d.reader.GetBytes(line.loc)
 				if err != nil {
 					log.Fatalf("GetBytes(%v): %v", line.loc, err)
 				}
@@ -97,12 +97,12 @@ func (w *Wrapper) Run(eventC chan Event) {
 outer:
 	for {
 		select {
-		case <-w.quitC:
+		case <-d.quitC:
 			if !blockClosed {
 				close(blockC)
 			}
 			break outer
-		case blockEvent := <-w.blockEventC:
+		case blockEvent := <-d.blockEventC:
 			log.Printf("Got block event %v", blockEvent)
 			if blockEvent.NewBlock != nil {
 				blockC <- *blockEvent.NewBlock
@@ -115,22 +115,22 @@ outer:
 		}
 	}
 	close(eventC)
-	w.doneC <- true
+	d.doneC <- true
 }
 
-func (w *Wrapper) Stop() {
-	w.quitC <- true
-	<-w.doneC
+func (d *Driver) Stop() {
+	d.quitC <- true
+	<-d.doneC
 
-	w.lineWrap.Stop()
+	d.lineWrap.Stop()
 }
 
-func (w *Wrapper) SetTopLineNumber(newTop int) {
-	if newTop == w.filter.topLineNumber {
+func (d *Driver) SetTopLineNumber(newTop int) {
+	if newTop == d.filter.topLineNumber {
 		return
 	}
 	if newTop < 0 {
 		log.Fatalf("SetTopLineNumber(%d) invalid number", newTop)
 	}
-	w.filter.topLineNumber = newTop
+	d.filter.topLineNumber = newTop
 }

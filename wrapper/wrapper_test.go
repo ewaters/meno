@@ -56,14 +56,14 @@ func newReader(t *testing.T, input string) *blocks.Reader {
 	return reader
 }
 
-func TestWrapper(t *testing.T) {
+func TestDriver(t *testing.T) {
 	defer func(prev bool) { enableLogger = prev }(enableLogger)
 	enableLogger = true
 
 	const width = 5
 	const height = 5
 	reader := newReader(t, "abcdefg\n1\n2\n3\n4\n5")
-	w, err := New(reader, width, height, []byte("\n"))
+	w, err := NewDriver(reader, width, height, []byte("\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,6 +94,8 @@ func TestWrapper(t *testing.T) {
 		t.Errorf("There was another event %v, expected none", event)
 	default:
 	}
+
+	// TODO: SetTopLineNumber and subscribe
 
 	w.Stop()
 
