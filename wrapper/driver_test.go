@@ -47,7 +47,7 @@ func newReader(t *testing.T, input string) *blocks.Reader {
 	t.Helper()
 	reader, err := blocks.NewReader(blocks.Config{
 		BlockSize:      5,
-		IndexNextBytes: 1,
+		IndexNextBytes: 4,
 		Source: blocks.ConfigSource{
 			Input: strings.NewReader(input),
 		},
@@ -83,6 +83,13 @@ func assertNoEventsWaiting(t *testing.T, d *Driver) {
 	}
 }
 
+func assertResizeWindow(t *testing.T, d *Driver, width int) {
+	t.Helper()
+	if err := d.ResizeWindow(width); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Watch lines from `from` with height `height`, but stop after receiving
 // `len(want)`. Assert that they equal `want`.
 // Then assert there are no other events waiting.
@@ -109,7 +116,6 @@ func TestDriver(t *testing.T) {
 	}
 
 	go d.Run()
-
 	if err := d.ResizeWindow(width); err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +163,7 @@ func TestDriver(t *testing.T) {
 
 func TestDriverSTDIN(t *testing.T) {
 	defer func(prev bool) { enableLogger = prev }(enableLogger)
-	enableLogger = true
+	enableLogger = false
 
 	reader, writer := io.Pipe()
 
@@ -202,6 +208,41 @@ func TestDriverSTDIN(t *testing.T) {
 	assertWatchedLines(t, d, 0, 3, []string{"ab", "cd"})
 
 	writer.Close()
+
+	// The writer closed, so the rest of the lines are now visible.
+	assertWatchedLines(t, d, 0, 10, []string{"ab", "cd", "ef", "g\n"})
+
+	d.Stop()
+}
+
+func TestLinesContaining(t *testing.T) {
+	defer func(prev bool) { enableLogger = prev }(enableLogger)
+	enableLogger = false
+
+	// The IndexNextBytes is set to 4, so we support queries up to length 5
+	reader := newReader(t, "Diane\nGeorge\nMadison\nWilliam\n")
+	d, err := NewDriver(reader, []byte("\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	go d.Run()
+	defer d.Stop()
+
+	assertResizeWindow(t, d, 80)
+	assertWatchedLines(t, d, 0, 10, []string{
+		"Diane\n",
+		"George\n",
+		"Madison\n",
+		"William\n",
+	})
+
+	err = d.Search(SearchRequest{
+		Query: "orge",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestLineWrapper(t *testing.T) {

@@ -3,6 +3,7 @@ package wrapper
 import (
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/ewaters/meno/blocks"
 )
@@ -21,6 +22,7 @@ func (ef eventFilter) wantLine(num int) bool {
 	return true
 }
 
+// The lineWrapCall encapsulates a lineWrapper connected to a block.Reader.
 type lineWrapCall struct {
 	d       *Driver
 	width   int
@@ -42,6 +44,12 @@ func (d *Driver) newLineWrapCall(width int) *lineWrapCall {
 	}
 }
 
+// run starts the lineWrapper and, if requested, backfills from the
+// blocks.Reader up to `backfillToID`. It then subscribes to `d.blockEventC` and
+// feeds new blocks into the lineWrapper. If `stop()` is called, we shutdown the
+// lineWrapper and return the last block ID that was read from `blockEventC` so
+// that a new lineWrapCall can be created (with a different width) that will
+// backfill up to this point before resuming the read.
 func (lwc *lineWrapCall) run(backfillToID int) {
 	blockC := make(chan blocks.Block)
 	go lwc.wrapper.Run(blockC, nil)
@@ -117,8 +125,44 @@ type VisibleLine struct {
 	Line   string
 }
 
+func (vl VisibleLine) String() string { return fmt.Sprintf("[%d] %q", vl.Number, vl.Line) }
+
+type LineOffset struct {
+	Line, Offset int
+}
+
+func (lo LineOffset) String() string { return fmt.Sprintf("line: %d, offset: %d", lo.Line, lo.Offset) }
+
+type LineOffsetRange struct {
+	From, To LineOffset
+}
+
+func (lor LineOffsetRange) String() string {
+	return fmt.Sprintf("from { %v } to { %v }", lor.From, lor.To)
+}
+
+type SearchStatus struct {
+	Request  SearchRequest
+	Complete bool
+	Results  []LineOffsetRange
+}
+
+func (ss SearchStatus) String() string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "request { %v }", ss.Request)
+	if ss.Complete {
+		sb.WriteString(" -- complete")
+	}
+	fmt.Fprintf(&sb, "; %d results", len(ss.Results))
+	if len(ss.Results) > 0 {
+		fmt.Fprintf(&sb, ", first result { %v }", ss.Results[0])
+	}
+	return sb.String()
+}
+
 type Event struct {
-	Line *VisibleLine
+	Line   *VisibleLine
+	Search *SearchStatus
 }
 
 func (d *Driver) Events() chan Event { return d.eventC }
@@ -218,5 +262,33 @@ func (d *Driver) ResizeWindow(width int) error {
 
 	d.wrapCall = d.newLineWrapCall(width)
 	go d.wrapCall.run(backfillToID)
+	return nil
+}
+
+type SearchRequest struct {
+	Query         string
+	MaxResults    int
+	SearchUp      bool
+	StartFromLine int
+}
+
+func (d *Driver) Search(req SearchRequest) error {
+	if d.wrapCall == nil {
+		return fmt.Errorf("Can't run Search without ResizeWindow() being called")
+	}
+
+	blockIDs, err := d.reader.BlockIDsContaining(req.Query)
+	if err != nil {
+		return err
+	}
+	log.Printf("Found block IDs %v", blockIDs)
+
+	for _, id := range blockIDs {
+		lines, err := d.wrapCall.wrapper.LinesInBlock(id)
+		if err != nil {
+			return err
+		}
+		log.Printf("Block #%d has lines %v", id, lines)
+	}
 	return nil
 }

@@ -58,6 +58,7 @@ func (lw *lineWrapper) Run(blockC chan blocks.Block, eventC chan wrapEvent) {
 	var lines []visibleLine
 	lastSubID := 0
 	subsByID := make(map[int]*lineSubscription)
+	linesByBlock := make(map[int][]int)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -78,6 +79,9 @@ outer:
 				log.Printf("got line %v", line)
 			}
 			lines = append(lines, line)
+			for id := line.loc.Start.BlockID; id <= line.loc.End.BlockID; id++ {
+				linesByBlock[id] = append(linesByBlock[id], line.number)
+			}
 			// Not sure if this is a good idea or not.
 			if eventC != nil {
 				eventC <- wrapEvent{
@@ -134,6 +138,15 @@ outer:
 				req.respC <- resp
 				continue
 			}
+			if id := req.linesInBlock; id != nil {
+				if lineNumbers, ok := linesByBlock[*id]; ok {
+					for _, i := range lineNumbers {
+						resp.lines = append(resp.lines, lines[i])
+					}
+				}
+				req.respC <- resp
+				continue
+			}
 			resp.err = fmt.Errorf("Unhandled req %v", req)
 			req.respC <- resp
 		}
@@ -153,8 +166,9 @@ func (lw *lineWrapper) Stop() {
 type chanRequest struct {
 	lineCount bool
 
-	newSub    *lineSubscription
-	cancelSub *int
+	newSub       *lineSubscription
+	cancelSub    *int
+	linesInBlock *int
 
 	respC chan chanResponse
 }
@@ -172,6 +186,7 @@ func (cr chanRequest) String() string {
 type chanResponse struct {
 	lineCount int
 	subID     int
+	lines     []visibleLine
 	err       error
 }
 
@@ -215,6 +230,13 @@ func (lw *lineWrapper) CancelSubscription(id int) error {
 		cancelSub: &id,
 	})
 	return resp.err
+}
+
+func (lw *lineWrapper) LinesInBlock(id int) ([]visibleLine, error) {
+	resp := lw.sendRequest(chanRequest{
+		linesInBlock: &id,
+	})
+	return resp.lines, resp.err
 }
 
 type visibleLine struct {
