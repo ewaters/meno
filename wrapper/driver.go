@@ -225,16 +225,12 @@ func (d *Driver) WatchLines(top, height int) error {
 			if !filter.wantLine(line.number) {
 				continue
 			}
-			//log.Printf("Driver got line %v", line)
-			buf, err := d.reader.GetBytes(line.loc)
+			vl, err := d.readVisibleLine(line)
 			if err != nil {
 				log.Fatalf("GetBytes(%v): %v", line.loc, err)
 			}
 			d.eventC <- Event{
-				Line: &VisibleLine{
-					Number: line.number,
-					Line:   string(buf),
-				},
+				Line: vl,
 			}
 		}
 		log.Printf("WatchLines(%d, %d): lineC was closed", top, height)
@@ -283,12 +279,118 @@ func (d *Driver) Search(req SearchRequest) error {
 	}
 	log.Printf("Found block IDs %v", blockIDs)
 
-	for _, id := range blockIDs {
-		lines, err := d.wrapCall.wrapper.LinesInBlock(id)
+	for _, bio := range blockIDs {
+		var lines []visibleLine
+		var lineNumbers []int
+		seenNumbers := make(map[int]bool)
+
+		// We only know that the block started the query; we don't know if it
+		// ended it, so we fetch the next block's lines as well.
+		for i := bio.BlockID; i <= bio.BlockID+1; i++ {
+			tmpLines, err := d.wrapCall.wrapper.LinesInBlock(bio.BlockID)
+			if err != nil {
+				return err
+			}
+			for _, line := range tmpLines {
+				if _, ok := seenNumbers[line.number]; ok {
+					continue
+				}
+				lines = append(lines, line)
+				lineNumbers = append(lineNumbers, line.number)
+				seenNumbers[line.number] = true
+			}
+		}
+
+		vlines, err := d.readVisibleLines(lines)
 		if err != nil {
 			return err
 		}
-		log.Printf("Block #%d has lines %v", id, lines)
+
+		log.Printf("Query %q in block %d is in lines %v", req.Query, bio.BlockID, lineNumbers)
+		lor := lineOffsetRangeForQueryIn(vlines, req.Query)
+		log.Printf("Query %q starting at { %v } is at { %v }", req.Query, bio, lor)
+	}
+	return nil
+}
+
+func (d *Driver) readVisibleLine(line visibleLine) (*VisibleLine, error) {
+	buf, err := d.reader.GetBytes(line.loc)
+	if err != nil {
+		return nil, fmt.Errorf("GetBytes(%v): %v", line, err)
+	}
+	return &VisibleLine{
+		Number: line.number,
+		Line:   string(buf),
+	}, nil
+}
+
+func (d *Driver) readVisibleLines(lines []visibleLine) ([]*VisibleLine, error) {
+	var vlines []*VisibleLine
+	for _, line := range lines {
+		vl, err := d.readVisibleLine(line)
+		if err != nil {
+			return nil, err
+		}
+		vlines = append(vlines, vl)
+	}
+	return vlines, nil
+}
+
+func lineOffsetRangeForQueryIn(lines []*VisibleLine, query string) *LineOffsetRange {
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		if idx := strings.Index(line.Line, query); idx != -1 {
+			return &LineOffsetRange{
+				From: LineOffset{
+					Line:   line.Number,
+					Offset: idx,
+				},
+				To: LineOffset{
+					Line:   line.Number,
+					Offset: idx + len(query) - 1,
+				},
+			}
+		}
+
+		// Build up a suffix from the following lines which is 1 less than the
+		// length of the query, so that if the query started on line `i`, we
+		// will know it.
+		wantSuffixLen := len(query) - 1
+		var suffix strings.Builder
+		var end LineOffset
+		for j := i + 1; j < len(lines); j++ {
+			line := lines[j]
+			end.Line = line.Number
+			if suffix.Len()+len(line.Line) <= wantSuffixLen {
+				suffix.WriteString(line.Line)
+				end.Offset = len(line.Line)
+			} else {
+				remain := wantSuffixLen - suffix.Len()
+				log.Printf(" += suffix %q", line.Line[:remain])
+				suffix.WriteString(line.Line[:remain])
+				end.Offset = remain - 1
+			}
+			if suffix.Len() == wantSuffixLen {
+				break
+			}
+		}
+		if suffix.Len() == wantSuffixLen {
+			combined := line.Line + suffix.String()
+			idx := strings.Index(combined, query)
+			if idx != -1 {
+				endOffset := idx + len(query)
+				leftOver := len(combined) - endOffset
+				log.Printf("%q + %q contains %q at %d (end %v, endOffset %d, leftover %d)", line.Line, suffix.String(), query, idx, end, endOffset, leftOver)
+				end.Offset -= leftOver
+				return &LineOffsetRange{
+					From: LineOffset{
+						Line:   line.Number,
+						Offset: idx,
+					},
+					To: end,
+				}
+			}
+		}
 	}
 	return nil
 }

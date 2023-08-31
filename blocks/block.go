@@ -64,6 +64,20 @@ func (bio BlockIDOffset) Validate() error {
 	return nil
 }
 
+func (bio BlockIDOffset) GTE(other BlockIDOffset) bool {
+	if bio.BlockID == other.BlockID {
+		return bio.Offset >= other.Offset
+	}
+	return bio.BlockID >= other.BlockID
+}
+
+func (bio BlockIDOffset) LTE(other BlockIDOffset) bool {
+	if bio.BlockID == other.BlockID {
+		return bio.Offset <= other.Offset
+	}
+	return bio.BlockID <= other.BlockID
+}
+
 type BlockIDOffsetRange struct {
 	Start, End BlockIDOffset
 }
@@ -86,6 +100,10 @@ func (bior BlockIDOffsetRange) Validate() error {
 
 func (bior BlockIDOffsetRange) String() string {
 	return fmt.Sprintf("%v -> %v", bior.Start, bior.End)
+}
+
+func (bior BlockIDOffsetRange) Contains(bio BlockIDOffset) bool {
+	return bior.Start.LTE(bio) && bior.End.GTE(bio)
 }
 
 func (b *Block) findNewlines() []BlockIDOffset {
@@ -190,7 +208,7 @@ type chanResponse struct {
 	blocks []*Block
 
 	// blockIDsContaining
-	blockIDs []int
+	blockIDs []BlockIDOffset
 
 	// getLine start and end
 	blockIDOffsetRange *BlockIDOffsetRange
@@ -304,10 +322,14 @@ func (r *Reader) Run(eventC chan Event) {
 			query := *req.blockIDsContaining
 			for _, qr := range index.Query(*req.blockIDsContaining) {
 				id := int(qr.DocID)
-				if !r.blockIDContains(id, blocks, query) {
+				offset := r.blockIDContains(id, blocks, query)
+				if offset == -1 {
 					continue
 				}
-				resp.blockIDs = append(resp.blockIDs, id)
+				resp.blockIDs = append(resp.blockIDs, BlockIDOffset{
+					BlockID: id,
+					Offset:  offset,
+				})
 			}
 			req.respC <- resp
 			continue
@@ -338,14 +360,15 @@ func (r *Reader) Run(eventC chan Event) {
 	r.doneC <- true
 }
 
-func (r *Reader) blockIDContains(id int, blocks []*Block, query string) bool {
+// Returns the index of the string in the block. -1 if it's not found.
+func (r *Reader) blockIDContains(id int, blocks []*Block, query string) int {
 	var sb strings.Builder
 	sb.Write(blocks[id].Bytes)
 	if id < len(blocks)-1 {
 		sb.Write(blocks[id+1].Bytes[:r.IndexNextBytes])
 	}
 	// log.Printf("blockIDContains(%d, %q) checking %q", id, query, sb.String())
-	return strings.Contains(sb.String(), query)
+	return strings.Index(sb.String(), query)
 }
 
 func (r *Reader) sendRequest(req chanRequest) chanResponse {
@@ -398,7 +421,7 @@ func (r *Reader) GetBytes(loc BlockIDOffsetRange) ([]byte, error) {
 	return bb.Bytes(), nil
 }
 
-func (r *Reader) BlockIDsContaining(query string) ([]int, error) {
+func (r *Reader) BlockIDsContaining(query string) ([]BlockIDOffset, error) {
 	resp := r.sendRequest(chanRequest{
 		blockIDsContaining: &query,
 	})

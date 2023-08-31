@@ -439,3 +439,44 @@ func TestGenerateVisibleLinesBlocksSameSizeAsWidth(t *testing.T) {
 
 	wg.Wait()
 }
+
+func lor(al, ao, bl, bo int) LineOffsetRange {
+	return LineOffsetRange{
+		From: LineOffset{
+			Line:   al,
+			Offset: ao,
+		},
+		To: LineOffset{
+			Line:   bl,
+			Offset: bo,
+		},
+	}
+}
+
+func TestLineOffsetRangeForQueryIn(t *testing.T) {
+	vlines := []*VisibleLine{
+		//   012345
+		{3, "abcdef"},
+		{4, "ghi\n"},
+		{5, "123\n"},
+	}
+
+	for _, tc := range []struct {
+		query string
+		want  LineOffsetRange
+	}{
+		{
+			query: "abc",
+			want:  lor(3, 0, 3, 2),
+		},
+		{
+			query: "efgh",
+			want:  lor(3, 4, 4, 1),
+		},
+	} {
+		got := lineOffsetRangeForQueryIn(vlines, tc.query)
+		if got == nil || got.String() != tc.want.String() {
+			t.Errorf("lineOffsetRangeForQueryIn(%q) got %v, want %v", tc.query, got, tc.want)
+		}
+	}
+}
