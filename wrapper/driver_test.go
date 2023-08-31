@@ -43,6 +43,21 @@ func assertSameStrings(t *testing.T, desc string, got, want []string) {
 	}
 }
 
+func assertSameLors(t *testing.T, desc string, got, want []LineOffsetRange) {
+	t.Helper()
+	if a, b := len(got), len(want); a != b {
+		t.Errorf("%s: got length %d, want %d", desc, a, b)
+		return
+	}
+	for i, a := range got {
+		b := want[i]
+		strA, strB := fmt.Sprintf("%v", a), fmt.Sprintf("%v", b)
+		if strA != strB {
+			t.Errorf("%s: [%d] got %q, want %q", desc, i, strA, strB)
+		}
+	}
+}
+
 func newReader(t *testing.T, input string) *blocks.Reader {
 	t.Helper()
 	reader, err := blocks.NewReader(blocks.Config{
@@ -215,7 +230,7 @@ func TestDriverSTDIN(t *testing.T) {
 	d.Stop()
 }
 
-func TestLinesContaining(t *testing.T) {
+func TestSearch(t *testing.T) {
 	defer func(prev bool) { enableLogger = prev }(enableLogger)
 	enableLogger = false
 
@@ -232,17 +247,24 @@ func TestLinesContaining(t *testing.T) {
 	assertResizeWindow(t, d, 80)
 	assertWatchedLines(t, d, 0, 10, []string{
 		"Diane\n",
+		//12345
 		"George\n",
 		"Madison\n",
 		"William\n",
 	})
 
-	err = d.Search(SearchRequest{
+	resultC, err := d.Search(SearchRequest{
 		Query: "orge",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	got := <-resultC
+	want := []LineOffsetRange{
+		lor(1, 2, 1, 5),
+	}
+	assertSameLors(t, "search result", got, want)
 }
 
 func TestLineWrapper(t *testing.T) {
@@ -482,9 +504,50 @@ func TestLineOffsetRangeForQueryIn(t *testing.T) {
 			want:  lor(3, 4, 5, 1),
 		},
 	} {
-		got := lineOffsetRangeForQueryIn(vlines, tc.query)
-		if got == nil || got.String() != tc.want.String() {
-			t.Errorf("lineOffsetRangeForQueryIn(%q)\n got %v\nwant %v", tc.query, got, tc.want)
+		lor := lineOffsetRangeForQueryIn(vlines, tc.query)
+		if len(lor) == 0 || lor[0].String() != tc.want.String() {
+			t.Errorf("lineOffsetRangeForQueryIn(%q)\n got %v\nwant %v", tc.query, lor[0], tc.want)
+		}
+	}
+}
+
+func TestLineOffsetRangeForQueryInMultiple(t *testing.T) {
+	vlines := []*VisibleLine{
+		//   0123456789
+		{3, "1. abc def\n"},
+		{4, "2. def ghi\n"},
+		{5, "3. bla bla\n"},
+	}
+
+	for _, tc := range []struct {
+		query string
+		want  []LineOffsetRange
+	}{
+		{
+			query: "def",
+			want: []LineOffsetRange{
+				lor(3, 7, 3, 9),
+				lor(4, 3, 4, 5),
+			},
+		},
+		{
+			query: "bla",
+			want: []LineOffsetRange{
+				lor(5, 3, 5, 5),
+				lor(5, 7, 5, 9),
+			},
+		},
+	} {
+		lor := lineOffsetRangeForQueryIn(vlines, tc.query)
+		if got, want := len(lor), len(tc.want); got != want {
+			t.Errorf("lineOffsetRangeForQueryIn(%q)\n got %v\nwant %v", tc.query, lor, tc.want)
+			continue
+		}
+		for i, got := range lor {
+			want := tc.want[i]
+			if got.String() != want.String() {
+				t.Errorf("lineOffsetRangeForQueryIn(%q) [%d]\n got %v\nwant %v", tc.query, i, got, want)
+			}
 		}
 	}
 }

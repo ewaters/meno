@@ -8,6 +8,8 @@ import (
 	"github.com/ewaters/meno/blocks"
 )
 
+const minSearchLength = 3
+
 type eventFilter struct {
 	topLineNumber  int
 	windowHeight   int
@@ -262,23 +264,36 @@ func (d *Driver) ResizeWindow(width int) error {
 }
 
 type SearchRequest struct {
-	Query         string
-	MaxResults    int
-	SearchUp      bool
-	StartFromLine int
+	Query string
 }
 
-func (d *Driver) Search(req SearchRequest) error {
+func (d *Driver) Search(req SearchRequest) (chan []LineOffsetRange, error) {
 	if d.wrapCall == nil {
-		return fmt.Errorf("Can't run Search without ResizeWindow() being called")
+		return nil, fmt.Errorf("Can't run Search without ResizeWindow() being called")
 	}
+	if l := len(req.Query); l < minSearchLength {
+		return nil, fmt.Errorf("Query %q is shorter than min length %d", req.Query, minSearchLength)
+	}
+	resultC := make(chan []LineOffsetRange, 1)
+	go func() {
+		lor, err := d.runSearch(req)
+		if err != nil {
+			log.Fatal(err)
+		}
+		resultC <- lor
+	}()
+	return resultC, nil
+}
 
+func (d *Driver) runSearch(req SearchRequest) ([]LineOffsetRange, error) {
 	blockIDs, err := d.reader.BlockIDsContaining(req.Query)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	log.Printf("Found block IDs %v", blockIDs)
 
+	var results []LineOffsetRange
+	dedupeLor := make(map[string]bool)
 	for _, bio := range blockIDs {
 		var lines []visibleLine
 		var lineNumbers []int
@@ -286,10 +301,11 @@ func (d *Driver) Search(req SearchRequest) error {
 
 		// We only know that the block started the query; we don't know if it
 		// ended it, so we fetch the next block's lines as well.
+		// This assumes that the block size > len(req.Query)
 		for i := bio.BlockID; i <= bio.BlockID+1; i++ {
 			tmpLines, err := d.wrapCall.wrapper.LinesInBlock(bio.BlockID)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			for _, line := range tmpLines {
 				if _, ok := seenNumbers[line.number]; ok {
@@ -303,14 +319,23 @@ func (d *Driver) Search(req SearchRequest) error {
 
 		vlines, err := d.readVisibleLines(lines)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
-		log.Printf("Query %q in block %d is in lines %v", req.Query, bio.BlockID, lineNumbers)
-		lor := lineOffsetRangeForQueryIn(vlines, req.Query)
-		log.Printf("Query %q starting at { %v } is at { %v }", req.Query, bio, lor)
+		//log.Printf("Query %q in block %d is in lines %v", req.Query, bio.BlockID, lineNumbers)
+		lors := lineOffsetRangeForQueryIn(vlines, req.Query)
+		for _, lor := range lors {
+			// We may see the same lor twice since we're loading the next block
+			key := lor.String()
+			if _, ok := dedupeLor[key]; ok {
+				continue
+			}
+			dedupeLor[key] = true
+			results = append(results, lor)
+		}
+		//log.Printf("Query %q starting at { %v } is at { %v }", req.Query, bio, lor)
 	}
-	return nil
+	return results, nil
 }
 
 func (d *Driver) readVisibleLine(line visibleLine) (*VisibleLine, error) {
@@ -336,63 +361,102 @@ func (d *Driver) readVisibleLines(lines []visibleLine) ([]*VisibleLine, error) {
 	return vlines, nil
 }
 
-func lineOffsetRangeForQueryIn(lines []*VisibleLine, query string) *LineOffsetRange {
-	for i := 0; i < len(lines); i++ {
-		line := lines[i]
-		log.Printf("Checking line %q for %q", line.Line, query)
-		if idx := strings.Index(line.Line, query); idx != -1 {
-			return &LineOffsetRange{
-				From: LineOffset{
-					Line:   line.Number,
-					Offset: idx,
-				},
-				To: LineOffset{
-					Line:   line.Number,
-					Offset: idx + len(query) - 1,
-				},
-			}
-		}
+func lineOffsetRangeForQueryIn(lines []*VisibleLine, query string) []LineOffsetRange {
+	var sb strings.Builder
 
-		// Build up a suffix from the following lines which is 1 less than the
-		// length of the query, so that if the query started on line `i`, we
-		// will know it.
-		wantSuffixLen := len(query) - 1
-		var suffix strings.Builder
-		var end LineOffset
-		for j := i + 1; j < len(lines); j++ {
-			line := lines[j]
-			end.Line = line.Number
-			if suffix.Len()+len(line.Line) <= wantSuffixLen {
-				log.Printf(" += suffix %q", line.Line)
-				suffix.WriteString(line.Line)
-				end.Offset = len(line.Line) - 1
-			} else {
-				remain := wantSuffixLen - suffix.Len()
-				log.Printf(" += suffix %q", line.Line[:remain])
-				suffix.WriteString(line.Line[:remain])
-				end.Offset = remain - 1
-			}
-			if suffix.Len() == wantSuffixLen {
-				break
-			}
-		}
-		combined := line.Line + suffix.String()
-		idx := strings.Index(combined, query)
-		if idx != -1 {
-			endOffset := idx + len(query)
-			leftOver := len(combined) - endOffset
-			log.Printf("%q + %q contains %q at %d (end %v, endOffset %d, leftover %d)", line.Line, suffix.String(), query, idx, end, endOffset, leftOver)
-			end.Offset -= leftOver
-			return &LineOffsetRange{
-				From: LineOffset{
-					Line:   line.Number,
-					Offset: idx,
-				},
-				To: end,
-			}
-		} else {
-			log.Printf("%q + %q does not contain %q", line.Line, suffix.String(), query)
+	// This is very much a brute force method but I'm good with that.
+	var lorPerIndex []LineOffset
+	for _, line := range lines {
+		sb.WriteString(line.Line)
+		for i := range line.Line {
+			lorPerIndex = append(lorPerIndex, LineOffset{
+				Line:   line.Number,
+				Offset: i,
+			})
 		}
 	}
-	return nil
+	combined := sb.String()
+	parts := strings.Split(combined, query)
+	if len(parts) == 1 {
+		return nil
+	}
+	//log.Printf("parts %#v", parts)
+	//log.Printf("lor %d  %#v", len(lorPerIndex), lorPerIndex)
+
+	var result []LineOffsetRange
+	index := 0
+	for i := 0; i < len(parts)-1; i++ {
+		part := parts[i]
+		index += len(part)
+		from := lorPerIndex[index]
+		index += len(query) - 1
+		to := lorPerIndex[index]
+		index++
+		result = append(result, LineOffsetRange{
+			From: from,
+			To:   to,
+		})
+	}
+	return result
+
+	/*
+		for i := 0; i < len(lines); i++ {
+			line := lines[i]
+			log.Printf("Checking line %q for %q", line.Line, query)
+			if idx := strings.Index(line.Line, query); idx != -1 {
+				return &LineOffsetRange{
+					From: LineOffset{
+						Line:   line.Number,
+						Offset: idx,
+					},
+					To: LineOffset{
+						Line:   line.Number,
+						Offset: idx + len(query) - 1,
+					},
+				}
+			}
+
+			// Build up a suffix from the following lines which is 1 less than the
+			// length of the query, so that if the query started on line `i`, we
+			// will know it.
+			wantSuffixLen := len(query) - 1
+			var suffix strings.Builder
+			var end LineOffset
+			for j := i + 1; j < len(lines); j++ {
+				line := lines[j]
+				end.Line = line.Number
+				if suffix.Len()+len(line.Line) <= wantSuffixLen {
+					log.Printf(" += suffix %q", line.Line)
+					suffix.WriteString(line.Line)
+					end.Offset = len(line.Line) - 1
+				} else {
+					remain := wantSuffixLen - suffix.Len()
+					log.Printf(" += suffix %q", line.Line[:remain])
+					suffix.WriteString(line.Line[:remain])
+					end.Offset = remain - 1
+				}
+				if suffix.Len() == wantSuffixLen {
+					break
+				}
+			}
+			combined := line.Line + suffix.String()
+			idx := strings.Index(combined, query)
+			if idx != -1 {
+				endOffset := idx + len(query)
+				leftOver := len(combined) - endOffset
+				log.Printf("%q + %q contains %q at %d (end %v, endOffset %d, leftover %d)", line.Line, suffix.String(), query, idx, end, endOffset, leftOver)
+				end.Offset -= leftOver
+				return &LineOffsetRange{
+					From: LineOffset{
+						Line:   line.Number,
+						Offset: idx,
+					},
+					To: end,
+				}
+			} else {
+				log.Printf("%q + %q does not contain %q", line.Line, suffix.String(), query)
+			}
+		}
+		return nil
+	*/
 }
