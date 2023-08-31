@@ -339,6 +339,7 @@ func (d *Driver) readVisibleLines(lines []visibleLine) ([]*VisibleLine, error) {
 func lineOffsetRangeForQueryIn(lines []*VisibleLine, query string) *LineOffsetRange {
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
+		log.Printf("Checking line %q for %q", line.Line, query)
 		if idx := strings.Index(line.Line, query); idx != -1 {
 			return &LineOffsetRange{
 				From: LineOffset{
@@ -362,8 +363,9 @@ func lineOffsetRangeForQueryIn(lines []*VisibleLine, query string) *LineOffsetRa
 			line := lines[j]
 			end.Line = line.Number
 			if suffix.Len()+len(line.Line) <= wantSuffixLen {
+				log.Printf(" += suffix %q", line.Line)
 				suffix.WriteString(line.Line)
-				end.Offset = len(line.Line)
+				end.Offset = len(line.Line) - 1
 			} else {
 				remain := wantSuffixLen - suffix.Len()
 				log.Printf(" += suffix %q", line.Line[:remain])
@@ -374,22 +376,22 @@ func lineOffsetRangeForQueryIn(lines []*VisibleLine, query string) *LineOffsetRa
 				break
 			}
 		}
-		if suffix.Len() == wantSuffixLen {
-			combined := line.Line + suffix.String()
-			idx := strings.Index(combined, query)
-			if idx != -1 {
-				endOffset := idx + len(query)
-				leftOver := len(combined) - endOffset
-				log.Printf("%q + %q contains %q at %d (end %v, endOffset %d, leftover %d)", line.Line, suffix.String(), query, idx, end, endOffset, leftOver)
-				end.Offset -= leftOver
-				return &LineOffsetRange{
-					From: LineOffset{
-						Line:   line.Number,
-						Offset: idx,
-					},
-					To: end,
-				}
+		combined := line.Line + suffix.String()
+		idx := strings.Index(combined, query)
+		if idx != -1 {
+			endOffset := idx + len(query)
+			leftOver := len(combined) - endOffset
+			log.Printf("%q + %q contains %q at %d (end %v, endOffset %d, leftover %d)", line.Line, suffix.String(), query, idx, end, endOffset, leftOver)
+			end.Offset -= leftOver
+			return &LineOffsetRange{
+				From: LineOffset{
+					Line:   line.Number,
+					Offset: idx,
+				},
+				To: end,
 			}
+		} else {
+			log.Printf("%q + %q does not contain %q", line.Line, suffix.String(), query)
 		}
 	}
 	return nil

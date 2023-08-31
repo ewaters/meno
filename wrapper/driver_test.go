@@ -473,10 +473,18 @@ func TestLineOffsetRangeForQueryIn(t *testing.T) {
 			query: "efgh",
 			want:  lor(3, 4, 4, 1),
 		},
+		{
+			query: "i\n123\n",
+			want:  lor(4, 2, 5, 3),
+		},
+		{
+			query: "efghi\n12",
+			want:  lor(3, 4, 5, 1),
+		},
 	} {
 		got := lineOffsetRangeForQueryIn(vlines, tc.query)
 		if got == nil || got.String() != tc.want.String() {
-			t.Errorf("lineOffsetRangeForQueryIn(%q) got %v, want %v", tc.query, got, tc.want)
+			t.Errorf("lineOffsetRangeForQueryIn(%q)\n got %v\nwant %v", tc.query, got, tc.want)
 		}
 	}
 }
