@@ -253,18 +253,36 @@ func TestSearch(t *testing.T) {
 		"William\n",
 	})
 
-	resultC, err := d.Search(SearchRequest{
+	req := SearchRequest{
 		Query: "orge",
-	})
-	if err != nil {
+	}
+	if err := d.Search(req); err != nil {
 		t.Fatal(err)
 	}
 
-	got := <-resultC
-	want := []LineOffsetRange{
-		lor(1, 2, 1, 5),
+	{
+		event := <-d.Events()
+		want := SearchStatus{
+			Request: req,
+		}
+		if got := event.Search; got == nil || got.String() != want.String() {
+			t.Fatalf("First event after search; got %v want %v", got, want)
+		}
 	}
-	assertSameLors(t, "search result", got, want)
+	{
+		event := <-d.Events()
+		want := SearchStatus{
+			Request:  req,
+			Complete: true,
+			Results: []LineOffsetRange{
+				lor(1, 2, 1, 5),
+			},
+		}
+		if got := event.Search; got == nil || got.String() != want.String() {
+			t.Fatalf("First event after search; got %v want %v", got, want)
+		}
+	}
+	assertNoEventsWaiting(t, d)
 }
 
 func TestLineWrapper(t *testing.T) {

@@ -21,7 +21,7 @@ func (tc blockIDsContainsTest) run(t *testing.T, r *Reader) {
 	} else {
 		for i, got := range ids {
 			want := tc.want[i]
-			if got != want {
+			if got.BlockID != want {
 				t.Errorf("BlockIDsContaining(%q): [%d] got %d, expected %d", tc.query, i, got, want)
 			}
 		}

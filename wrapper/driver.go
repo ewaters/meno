@@ -143,6 +143,10 @@ func (lor LineOffsetRange) String() string {
 	return fmt.Sprintf("from { %v } to { %v }", lor.From, lor.To)
 }
 
+type SearchRequest struct {
+	Query string
+}
+
 type SearchStatus struct {
 	Request  SearchRequest
 	Complete bool
@@ -185,6 +189,7 @@ func (d *Driver) Stop() {
 	if d.wrapCall != nil {
 		d.wrapCall.stop()
 	}
+	close(d.eventC)
 }
 
 func (d *Driver) closeActiveFilter() error {
@@ -263,26 +268,33 @@ func (d *Driver) ResizeWindow(width int) error {
 	return nil
 }
 
-type SearchRequest struct {
-	Query string
-}
-
-func (d *Driver) Search(req SearchRequest) (chan []LineOffsetRange, error) {
+func (d *Driver) Search(req SearchRequest) error {
 	if d.wrapCall == nil {
-		return nil, fmt.Errorf("Can't run Search without ResizeWindow() being called")
+		return fmt.Errorf("Can't run Search without ResizeWindow() being called")
 	}
 	if l := len(req.Query); l < minSearchLength {
-		return nil, fmt.Errorf("Query %q is shorter than min length %d", req.Query, minSearchLength)
+		return fmt.Errorf("Query %q is shorter than min length %d", req.Query, minSearchLength)
 	}
-	resultC := make(chan []LineOffsetRange, 1)
 	go func() {
+		d.eventC <- Event{
+			Search: &SearchStatus{
+				Request: req,
+			},
+		}
 		lor, err := d.runSearch(req)
 		if err != nil {
 			log.Fatal(err)
 		}
-		resultC <- lor
+		d.eventC <- Event{
+			Search: &SearchStatus{
+				Request:  req,
+				Complete: true,
+				Results:  lor,
+			},
+		}
+
 	}()
-	return resultC, nil
+	return nil
 }
 
 func (d *Driver) runSearch(req SearchRequest) ([]LineOffsetRange, error) {
