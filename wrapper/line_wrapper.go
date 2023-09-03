@@ -3,10 +3,10 @@ package wrapper
 import (
 	"bytes"
 	"fmt"
-	"log"
 	"sync"
 
 	"github.com/ewaters/meno/blocks"
+	"github.com/golang/glog"
 )
 
 var (
@@ -76,7 +76,7 @@ outer:
 			}
 			line.number = len(lines)
 			if enableLogger {
-				log.Printf("got line %v", line)
+				glog.Infof("got line %v", line)
 			}
 			lines = append(lines, line)
 			for id := line.loc.Start.BlockID; id <= line.loc.End.BlockID; id++ {
@@ -99,7 +99,7 @@ outer:
 			break outer
 		case req := <-lw.reqC:
 			if enableLogger {
-				log.Printf("got req %v", req)
+				glog.Infof("got req %v", req)
 			}
 			resp := chanResponse{}
 			if req.lineCount {
@@ -256,7 +256,7 @@ func generateVisibleLines(lineSep []byte, width int, blockC chan blocks.Block, l
 	endsWithNewline := false
 
 	if enableLogger {
-		log.Printf("Starting range over blockC")
+		glog.Infof("Starting range over blockC")
 	}
 	for block := range blockC {
 		start := blocks.BlockIDOffset{
@@ -271,7 +271,7 @@ func generateVisibleLines(lineSep []byte, width int, blockC chan blocks.Block, l
 			Offset:  0 - len(leftOver),
 		}
 		if false && enableLogger {
-			log.Printf("reset start: %v, end: %v", start, end)
+			glog.Infof("reset start: %v, end: %v", start, end)
 		}
 
 		combined := append(leftOver, block.Bytes...)
@@ -281,7 +281,7 @@ func generateVisibleLines(lineSep []byte, width int, blockC chan blocks.Block, l
 			for _, line := range lines {
 				linesStr = append(linesStr, string(line))
 			}
-			log.Printf("Block [%d] %q, have lines %q", block.ID, string(block.Bytes), linesStr)
+			glog.Infof("Block [%d] %q, have lines %q", block.ID, string(block.Bytes), linesStr)
 		}
 		leftOver = nil
 		endsWithNewline = bytes.HasSuffix(combined, lineSep)
@@ -306,14 +306,14 @@ func generateVisibleLines(lineSep []byte, width int, blockC chan blocks.Block, l
 					endsWithLineSep: false,
 				}
 				if enableLogger {
-					log.Printf("line: %q, sending vl %v (wrapped)", string(line[:width]), vl)
+					glog.Infof("line: %q, sending vl %v (wrapped)", string(line[:width]), vl)
 				}
 				lineC <- vl
 				line = line[width:]
 				end.Offset++
 				start = end
 				if false && enableLogger {
-					log.Printf("start: %v, end: %v", start, end)
+					glog.Infof("start: %v, end: %v", start, end)
 				}
 			}
 			if !lastLine || endsWithNewline {
@@ -326,13 +326,13 @@ func generateVisibleLines(lineSep []byte, width int, blockC chan blocks.Block, l
 					endsWithLineSep: true,
 				}
 				if enableLogger {
-					log.Printf("line: %q, sending vl %v", string(line), vl)
+					glog.Infof("line: %q, sending vl %v", string(line), vl)
 				}
 				lineC <- vl
 				end.Offset++
 				start = end
 				if false && enableLogger {
-					log.Printf("start: %v, end: %v", start, end)
+					glog.Infof("start: %v, end: %v", start, end)
 				}
 			} else {
 				leftOver = line
@@ -352,7 +352,7 @@ func generateVisibleLines(lineSep []byte, width int, blockC chan blocks.Block, l
 			endsWithLineSep: endsWithNewline,
 		}
 		if enableLogger {
-			log.Printf("leftover line: %q, sending vl %v", string(leftOver), vl)
+			glog.Infof("leftover line: %q, sending vl %v", string(leftOver), vl)
 		}
 		lineC <- vl
 	}

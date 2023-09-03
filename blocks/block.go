@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"log"
 	"strings"
 
 	"github.com/ewaters/meno/trigram"
+	"github.com/golang/glog"
 )
 
 // An input source. Either from a file (with Size set) or from STDIN.
@@ -241,7 +241,7 @@ func (r *Reader) read() {
 			if err == io.EOF {
 				break
 			}
-			log.Fatal(err)
+			glog.Fatal(err)
 		}
 	}
 	r.reqC <- chanRequest{
@@ -277,7 +277,7 @@ func (r *Reader) Run(eventC chan Event) {
 		nls := block.findNewlines()
 		newlines = append(newlines, nls...)
 
-		//log.Printf("Indexing %q:%q to %d", string(buf), string(next), id)
+		//glog.Infof("Indexing %q:%q to %d", string(buf), string(next), id)
 		index.AddWithID(string(buf)+string(next), uint64(id))
 		readStatus.Newlines += block.Newlines
 		readStatus.Blocks++
@@ -289,7 +289,7 @@ func (r *Reader) Run(eventC chan Event) {
 	}
 
 	for req := range r.reqC {
-		//log.Printf("Got req %v", req)
+		//glog.Infof("Got req %v", req)
 		if req.bytesRead != nil {
 			pendingBytes = append(pendingBytes, req.bytesRead...)
 			block, next := r.BlockSize, r.IndexNextBytes
@@ -355,7 +355,7 @@ func (r *Reader) Run(eventC chan Event) {
 			req.respC <- resp
 			continue
 		}
-		log.Fatalf("Unhandled request %v", req)
+		glog.Fatalf("Unhandled request %v", req)
 	}
 	r.doneC <- true
 }
@@ -367,7 +367,7 @@ func (r *Reader) blockIDContains(id int, blocks []*Block, query string) int {
 	if id < len(blocks)-1 {
 		sb.Write(blocks[id+1].Bytes[:r.IndexNextBytes])
 	}
-	// log.Printf("blockIDContains(%d, %q) checking %q", id, query, sb.String())
+	// glog.Infof("blockIDContains(%d, %q) checking %q", id, query, sb.String())
 	return strings.Index(sb.String(), query)
 }
 

@@ -1,9 +1,8 @@
 package term
 
 import (
-	"log"
-
 	"github.com/gdamore/tcell/v2"
+	"github.com/golang/glog"
 
 	"github.com/ewaters/meno/blocks"
 	"github.com/ewaters/meno/wrapper"
@@ -88,7 +87,7 @@ outer:
 		select {
 		case ev, ok := <-m.driver.Events():
 			if !ok {
-				log.Printf("driver.Events closed; breaking Run")
+				glog.Infof("driver.Events closed; breaking Run")
 				break outer
 			}
 			m.handleDataEvent(ev)
@@ -99,7 +98,7 @@ outer:
 }
 
 func (m *Meno) handleDataEvent(event wrapper.Event) {
-	log.Printf("handleDataEvent %v", event)
+	glog.Infof("handleDataEvent %v", event)
 	// TODO
 }
 
@@ -110,7 +109,7 @@ func (m *Meno) handleTermEvent(event tcell.Event) {
 		m.resized()
 		m.showScreen()
 	case *tcell.EventKey:
-		log.Printf("EventKey %v for mode %v", ev, m.mode)
+		glog.Infof("EventKey %v for mode %v", ev, m.mode)
 		switch m.mode {
 		case ModePaging:
 			m.keyDownPaging(ev)
@@ -119,14 +118,14 @@ func (m *Meno) handleTermEvent(event tcell.Event) {
 		case ModeSearchActive:
 			m.keyDownSearchActive(ev)
 		default:
-			log.Printf("EventKey %v for mode %v not handled", ev, m.mode)
+			glog.Infof("EventKey %v for mode %v not handled", ev, m.mode)
 		}
 	}
 }
 
 /*
 func (m *Meno) handleSearchResult(r searchResult) {
-	log.Printf("handleSearchResult %q", r)
+	glog.Infof("handleSearchResult %q", r)
 	if r.lineNumber != 0 {
 		m.mode = ModePaging
 		m.jumpToLine(r.lineNumber)
@@ -141,11 +140,11 @@ func (m *Meno) handleSearchResult(r searchResult) {
 */
 
 func (m *Meno) finish() {
-	log.Printf("calling Fini")
+	glog.Infof("calling Fini")
 	m.screen.Fini()
-	log.Printf("stopping driver")
+	glog.Infof("stopping driver")
 	m.driver.Stop()
-	log.Printf("meno finished!")
+	glog.Infof("meno finished!")
 	//os.Exit(0)
 	//m.quitC <- struct{}{}
 	//m.done = true
@@ -196,10 +195,10 @@ func (m *Meno) keyDownPaging(ev *tcell.EventKey) {
 				m.startSearch(true)
 			}
 		default:
-			log.Printf("keyDownPaging unhandled rune %q", ev.Rune())
+			glog.Infof("keyDownPaging unhandled rune %q", ev.Rune())
 		}
 	default:
-		log.Printf("keyDownPaging unhandled EventKey %v", ev.Key())
+		glog.Infof("keyDownPaging unhandled EventKey %v", ev.Key())
 	}
 }
 
@@ -219,7 +218,7 @@ func (m *Meno) keyDownSearch(ev *tcell.EventKey) {
 		newInput := append([]rune{}, m.searchInput...)
 		m.updateSearch(append(newInput, ev.Rune()))
 	default:
-		log.Printf("keyDownSearch unhandled EventKey %v", ev.Key())
+		glog.Infof("keyDownSearch unhandled EventKey %v", ev.Key())
 	}
 }
 
@@ -228,7 +227,7 @@ func (m *Meno) keyDownSearchActive(ev *tcell.EventKey) {
 	case tcell.KeyEscape, tcell.KeyCtrlC:
 		m.changeMode(ModePaging)
 	default:
-		log.Printf("keyDownSearching unhandled EventKey %v", ev.Key())
+		glog.Infof("keyDownSearching unhandled EventKey %v", ev.Key())
 	}
 }
 
@@ -238,7 +237,7 @@ func (m *Meno) startSearch(oppositeDirection bool) {
 
 /*
 	if len(m.searchInput) == 0 {
-		log.Printf("ERROR: startSearch called without searchInput set")
+		glog.Infof("ERROR: startSearch called without searchInput set")
 		return
 	}
 	mode := m.mode
@@ -252,10 +251,10 @@ func (m *Meno) startSearch(oppositeDirection bool) {
 	if oppositeDirection {
 		if mode == ModeSearchUp {
 			mode = ModeSearchDown
-			log.Printf("Search was up but flipped to down")
+			glog.Infof("Search was up but flipped to down")
 		} else {
 			mode = ModeSearchUp
-			log.Printf("Search was down but flipped to up")
+			glog.Infof("Search was down but flipped to up")
 		}
 	}
 
@@ -273,7 +272,7 @@ func (m *Meno) startSearch(oppositeDirection bool) {
 		StartFromLine: startFromLine,
 		SearchUp:      mode == ModeSearchUp,
 		MaxResults:    1,
-		Logf:          log.Printf,
+		Logf:          glog.Infof,
 	}
 	go m.data.Search(req)
 	m.activeSearch = &req
@@ -350,7 +349,7 @@ func (m *Meno) resized() {
 
 	m.driver.ResizeWindow(m.w)
 	m.driver.WatchLines(m.firstLine, m.h)
-	log.Printf("Window resized")
+	glog.Infof("Window resized")
 
 	// TODO: Adjust first line so that the first character of the previously
 	// visible first line is still in the visible first line (somewhere, not
@@ -358,14 +357,14 @@ func (m *Meno) resized() {
 
 	/*
 		if m.data == nil {
-			log.Printf("Starting scan of input file")
-			m.data = NewIndexedData(m.inFile, m.w, m.maxQuery, log.Printf)
-			log.Printf("Have %d visible lines", m.data.VisibleLines())
+			glog.Infof("Starting scan of input file")
+			m.data = NewIndexedData(m.inFile, m.w, m.maxQuery, glog.Infof)
+			glog.Infof("Have %d visible lines", m.data.VisibleLines())
 		} else {
-			log.Printf("Window resized to %dx%d - (re)building data", m.w, m.h)
+			glog.Infof("Window resized to %dx%d - (re)building data", m.w, m.h)
 			m.data.Resize(m.w)
 			m.firstLine = 0
-			log.Printf("Have %d visible lines", m.data.VisibleLines())
+			glog.Infof("Have %d visible lines", m.data.VisibleLines())
 		}
 	*/
 }

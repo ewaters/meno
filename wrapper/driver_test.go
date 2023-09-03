@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ewaters/meno/blocks"
+	"github.com/golang/glog"
 )
 
 func init() {
@@ -318,7 +319,7 @@ func TestLineWrapper(t *testing.T) {
 				// Have the lineWrapper close lineC and clean up the
 				// subscription.
 				if err := lw.CancelSubscription(subID); err != nil {
-					log.Fatalf("Failed to cancel subscription %d: %v", subID, err)
+					glog.Fatalf("Failed to cancel subscription %d: %v", subID, err)
 				}
 			}
 		}

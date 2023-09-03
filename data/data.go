@@ -2,11 +2,11 @@ package data
 
 import (
 	"io"
-	"log"
 	"sort"
 	"strings"
 
 	"github.com/ewaters/meno/trigram"
+	"github.com/golang/glog"
 )
 
 // For testing.
@@ -48,7 +48,7 @@ func (il *IndexedLines) FinishAddLine() {
 
 func (il *IndexedLines) LineMatches(i int, query string) bool {
 	if i < 0 || i > il.Size()-1 {
-		log.Fatalf("LineMatches(%d, %q) called with out-of-bounds index", i, query)
+		glog.Fatalf("LineMatches(%d, %q) called with out-of-bounds index", i, query)
 	}
 	vline := il.vl[i]
 
@@ -173,7 +173,7 @@ func NewIndexedData(inFile io.Reader, width int, maxQuery int, logf func(string,
 			if err == io.EOF {
 				break
 			}
-			log.Fatal(err)
+			glog.Fatal(err)
 		}
 		if n < bufSize {
 			break
@@ -189,12 +189,12 @@ func generateVisibleLines(width int, inC chan string, outC chan visibleLine) {
 	leftOver := ""
 	endsWithNewline := false
 	if enableLogger {
-		log.Printf("Starting range over inC")
+		glog.Infof("Starting range over inC")
 	}
 	for part := range inC {
 		lines := strings.Split(leftOver+part, "\n")
 		if enableLogger {
-			log.Printf("Read %q, have lines %q", part, lines)
+			glog.Infof("Read %q, have lines %q", part, lines)
 		}
 		leftOver = ""
 		endsWithNewline = part[len(part)-1] == '\n'
