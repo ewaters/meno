@@ -2,10 +2,10 @@ package wrapper
 
 import (
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/ewaters/meno/blocks"
+	"github.com/golang/glog"
 )
 
 const minSearchLength = 3
@@ -57,13 +57,13 @@ func (lwc *lineWrapCall) run(backfillToID int) {
 	go lwc.wrapper.Run(blockC, nil)
 
 	if backfillToID != -1 {
-		log.Printf("[lwc: %d] Backfilling to ID %d", lwc.width, backfillToID)
+		glog.Infof("[lwc: %d] Backfilling to ID %d", lwc.width, backfillToID)
 		blocks, err := lwc.d.reader.GetBlockRange(0, backfillToID)
 		if err != nil {
-			log.Fatalf("GetBlockRange(0, %d): %v", backfillToID, err)
+			glog.Fatalf("GetBlockRange(0, %d): %v", backfillToID, err)
 		}
 		for _, block := range blocks {
-			log.Printf("[lwc: %d] Backfill block %v", lwc.width, block)
+			glog.Infof("[lwc: %d] Backfill block %v", lwc.width, block)
 			blockC <- *block
 		}
 	}
@@ -79,24 +79,24 @@ outer:
 			}
 			break outer
 		case blockEvent := <-lwc.d.blockEventC:
-			log.Printf("[lwc: %d] Got block event %v", lwc.width, blockEvent)
+			glog.Infof("[lwc: %d] Got block event %v", lwc.width, blockEvent)
 			if blockEvent.NewBlock != nil {
 				blockC <- *blockEvent.NewBlock
 				lastID = blockEvent.NewBlock.ID
 			}
 			if blockEvent.Status.RemainingBytes == 0 {
-				log.Printf("[lwc: %d]: Closing blockC since no remaining bytes", lwc.width)
+				glog.Infof("[lwc: %d]: Closing blockC since no remaining bytes", lwc.width)
 				close(blockC)
 				blockClosed = true
 			}
 		}
 	}
-	log.Printf("[lwc: %d]: done; last ID %d", lwc.width, lastID)
+	glog.Infof("[lwc: %d]: done; last ID %d", lwc.width, lastID)
 	lwc.doneC <- lastID
 }
 
 func (lwc *lineWrapCall) stop() int {
-	log.Printf("[lwc: %d]: stop", lwc.width)
+	glog.Infof("[lwc: %d]: stop", lwc.width)
 	lwc.quitC <- true
 	lwc.wrapper.Stop()
 	return <-lwc.doneC
@@ -227,20 +227,22 @@ func (d *Driver) WatchLines(top, height int) error {
 		doneC:          make(chan bool),
 	}
 	go func() {
-		log.Printf("WatchLines(%d, %d): starting range over lineC", top, height)
+		glog.Infof("WatchLines(%d, %d): starting range over lineC", top, height)
 		for line := range lineC {
 			if !filter.wantLine(line.number) {
+				//glog.Infof("WatchLines(%d, %d): ignoring line %d", top, height, line.number)
 				continue
 			}
 			vl, err := d.readVisibleLine(line)
 			if err != nil {
-				log.Fatalf("GetBytes(%v): %v", line.loc, err)
+				glog.Fatalf("readVisibleLine(%v): %v", line.loc, err)
 			}
+			//glog.Infof("WatchLines(%d, %d): sending line %v", top, height, vl)
 			d.eventC <- Event{
 				Line: vl,
 			}
 		}
-		log.Printf("WatchLines(%d, %d): lineC was closed", top, height)
+		glog.Infof("WatchLines(%d, %d): lineC was closed", top, height)
 		filter.doneC <- true
 	}()
 	d.filter = filter
@@ -259,7 +261,7 @@ func (d *Driver) ResizeWindow(width int) error {
 
 	backfillToID := -1
 	if d.wrapCall != nil {
-		log.Printf("Stopping previous line wrapper (width: %d)", d.wrapCall.width)
+		glog.Infof("Stopping previous line wrapper (width: %d)", d.wrapCall.width)
 		backfillToID = d.wrapCall.stop()
 	}
 
@@ -283,7 +285,7 @@ func (d *Driver) Search(req SearchRequest) error {
 		}
 		lor, err := d.runSearch(req)
 		if err != nil {
-			log.Fatal(err)
+			glog.Fatal(err)
 		}
 		d.eventC <- Event{
 			Search: &SearchStatus{
@@ -302,7 +304,7 @@ func (d *Driver) runSearch(req SearchRequest) ([]LineOffsetRange, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("Found block IDs %v", blockIDs)
+	glog.Infof("Found block IDs %v", blockIDs)
 
 	var results []LineOffsetRange
 	dedupeLor := make(map[string]bool)
@@ -334,7 +336,7 @@ func (d *Driver) runSearch(req SearchRequest) ([]LineOffsetRange, error) {
 			return nil, err
 		}
 
-		//log.Printf("Query %q in block %d is in lines %v", req.Query, bio.BlockID, lineNumbers)
+		//glog.Infof("Query %q in block %d is in lines %v", req.Query, bio.BlockID, lineNumbers)
 		lors := lineOffsetRangeForQueryIn(vlines, req.Query)
 		for _, lor := range lors {
 			// We may see the same lor twice since we're loading the next block
@@ -345,7 +347,7 @@ func (d *Driver) runSearch(req SearchRequest) ([]LineOffsetRange, error) {
 			dedupeLor[key] = true
 			results = append(results, lor)
 		}
-		//log.Printf("Query %q starting at { %v } is at { %v }", req.Query, bio, lor)
+		//glog.Infof("Query %q starting at { %v } is at { %v }", req.Query, bio, lor)
 	}
 	return results, nil
 }
@@ -392,8 +394,8 @@ func lineOffsetRangeForQueryIn(lines []*VisibleLine, query string) []LineOffsetR
 	if len(parts) == 1 {
 		return nil
 	}
-	//log.Printf("parts %#v", parts)
-	//log.Printf("lor %d  %#v", len(lorPerIndex), lorPerIndex)
+	//glog.Infof("parts %#v", parts)
+	//glog.Infof("lor %d  %#v", len(lorPerIndex), lorPerIndex)
 
 	var result []LineOffsetRange
 	index := 0
@@ -414,7 +416,7 @@ func lineOffsetRangeForQueryIn(lines []*VisibleLine, query string) []LineOffsetR
 	/*
 		for i := 0; i < len(lines); i++ {
 			line := lines[i]
-			log.Printf("Checking line %q for %q", line.Line, query)
+			glog.Infof("Checking line %q for %q", line.Line, query)
 			if idx := strings.Index(line.Line, query); idx != -1 {
 				return &LineOffsetRange{
 					From: LineOffset{
@@ -438,12 +440,12 @@ func lineOffsetRangeForQueryIn(lines []*VisibleLine, query string) []LineOffsetR
 				line := lines[j]
 				end.Line = line.Number
 				if suffix.Len()+len(line.Line) <= wantSuffixLen {
-					log.Printf(" += suffix %q", line.Line)
+					glog.Infof(" += suffix %q", line.Line)
 					suffix.WriteString(line.Line)
 					end.Offset = len(line.Line) - 1
 				} else {
 					remain := wantSuffixLen - suffix.Len()
-					log.Printf(" += suffix %q", line.Line[:remain])
+					glog.Infof(" += suffix %q", line.Line[:remain])
 					suffix.WriteString(line.Line[:remain])
 					end.Offset = remain - 1
 				}
@@ -456,7 +458,7 @@ func lineOffsetRangeForQueryIn(lines []*VisibleLine, query string) []LineOffsetR
 			if idx != -1 {
 				endOffset := idx + len(query)
 				leftOver := len(combined) - endOffset
-				log.Printf("%q + %q contains %q at %d (end %v, endOffset %d, leftover %d)", line.Line, suffix.String(), query, idx, end, endOffset, leftOver)
+				glog.Infof("%q + %q contains %q at %d (end %v, endOffset %d, leftover %d)", line.Line, suffix.String(), query, idx, end, endOffset, leftOver)
 				end.Offset -= leftOver
 				return &LineOffsetRange{
 					From: LineOffset{
@@ -466,7 +468,7 @@ func lineOffsetRangeForQueryIn(lines []*VisibleLine, query string) []LineOffsetR
 					To: end,
 				}
 			} else {
-				log.Printf("%q + %q does not contain %q", line.Line, suffix.String(), query)
+				glog.Infof("%q + %q does not contain %q", line.Line, suffix.String(), query)
 			}
 		}
 		return nil

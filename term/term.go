@@ -73,11 +73,15 @@ func NewMeno(config MenoConfig, s tcell.Screen) (*Meno, error) {
 	s.SetStyle(m.style)
 	s.Clear()
 
+	m.w, m.h = m.screen.Size()
+	m.resized()
+
 	return m, nil
 }
 
 func (m *Meno) Run() {
 	go m.screen.ChannelEvents(m.eventC, m.quitC)
+	go m.driver.Run()
 
 outer:
 	for {
@@ -95,6 +99,7 @@ outer:
 }
 
 func (m *Meno) handleDataEvent(event wrapper.Event) {
+	log.Printf("handleDataEvent %v", event)
 	// TODO
 }
 
@@ -344,6 +349,12 @@ func (m *Meno) resized() {
 	m.screen.Sync()
 
 	m.driver.ResizeWindow(m.w)
+	m.driver.WatchLines(m.firstLine, m.h)
+	log.Printf("Window resized")
+
+	// TODO: Adjust first line so that the first character of the previously
+	// visible first line is still in the visible first line (somewhere, not
+	// necessarily in at 0,0).
 
 	/*
 		if m.data == nil {

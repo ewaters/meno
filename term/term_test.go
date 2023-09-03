@@ -1,7 +1,7 @@
 package term
 
 import (
-	"bytes"
+	"log"
 	"strings"
 	"sync"
 	"testing"
@@ -11,11 +11,15 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
+func init() {
+	log.SetFlags(log.Lmicroseconds | log.Lshortfile)
+}
+
 func TestTerm(t *testing.T) {
 	config := MenoConfig{
 		Config: blocks.Config{
 			Source: blocks.ConfigSource{
-				Input: bytes.NewBufferString("abcdefg\n12345\n"),
+				Input: strings.NewReader("abcdefg\n12345\n"),
 			},
 			BlockSize:      10,
 			IndexNextBytes: 2,
@@ -53,6 +57,15 @@ func TestTerm(t *testing.T) {
 			if sb.Len() == 0 {
 				continue
 			}
+			if strings.Count(sb.String(), " ") == w {
+				continue
+			}
+			/*
+				// Special case: first chekc.
+				if strings.Count(sb.String(), "X") == w {
+					continue
+				}
+			*/
 			t.Logf("[%2d]: %q", y, sb.String())
 			lines = append(lines, sb.String())
 		}
