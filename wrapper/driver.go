@@ -15,6 +15,7 @@ type eventFilter struct {
 	windowHeight   int
 	subscriptionID int
 	doneC          chan bool
+	quitC          chan bool
 }
 
 func (ef eventFilter) wantLine(num int) bool {
@@ -200,6 +201,7 @@ func (d *Driver) closeActiveFilter() error {
 	if err != nil {
 		return fmt.Errorf("CancelSubscription(%d): %w", d.filter.subscriptionID, err)
 	}
+	d.filter.quitC <- true
 	<-d.filter.doneC
 	d.filter = nil
 	return nil
@@ -213,7 +215,11 @@ func (d *Driver) WatchLines(top, height int) error {
 	if d.wrapCall == nil {
 		return fmt.Errorf("Cannot WatchLines() before ResizeWindow()")
 	}
-	lineC := make(chan visibleLine)
+	// If we don't set lineC to buffered, we will cause lineWrapper.Run to get
+	// stuck waiting to send to lineC.
+	// TODO: I'm not sure if there's not a latent race condition here, though.
+	// Try setting this back to 0 and debug it more fully.
+	lineC := make(chan visibleLine, height)
 	firstLine, lastLine := top, top+height-1
 	subID, err := d.wrapCall.wrapper.SubscribeLines(firstLine, lastLine, lineC)
 	if err != nil {
@@ -225,24 +231,33 @@ func (d *Driver) WatchLines(top, height int) error {
 		topLineNumber:  top,
 		windowHeight:   height,
 		doneC:          make(chan bool),
+		quitC:          make(chan bool, 1),
 	}
 	go func() {
 		glog.Infof("WatchLines(%d, %d): starting range over lineC", top, height)
+	outer:
 		for line := range lineC {
 			if !filter.wantLine(line.number) {
 				//glog.Infof("WatchLines(%d, %d): ignoring line %d", top, height, line.number)
 				continue
 			}
+			//glog.Infof("WatchLines(%d, %d): reading line %v", top, height, line)
 			vl, err := d.readVisibleLine(line)
 			if err != nil {
 				glog.Fatalf("readVisibleLine(%v): %v", line.loc, err)
 			}
-			//glog.Infof("WatchLines(%d, %d): sending line %v", top, height, vl)
-			d.eventC <- Event{
+			//glog.Infof("WatchLines(%d, %d): sending line %d to eventC", top, height, vl.Number)
+			ev := Event{
 				Line: vl,
 			}
+			select {
+			case d.eventC <- ev:
+			case <-filter.quitC:
+				//glog.Infof("WatchLines(%d, %d): closed externally", top, height)
+				break outer
+			}
 		}
-		glog.Infof("WatchLines(%d, %d): lineC was closed", top, height)
+		glog.Infof("WatchLines(%d, %d): done", top, height)
 		filter.doneC <- true
 	}()
 	d.filter = filter

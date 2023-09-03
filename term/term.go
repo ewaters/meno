@@ -71,8 +71,8 @@ func NewMeno(config MenoConfig, s tcell.Screen) (*Meno, error) {
 	}
 	s.SetStyle(m.style)
 	s.Clear()
+	m.w, m.h = s.Size()
 
-	m.w, m.h = m.screen.Size()
 	m.resized()
 
 	return m, nil
@@ -98,14 +98,28 @@ outer:
 }
 
 func (m *Meno) handleDataEvent(event wrapper.Event) {
-	glog.Infof("handleDataEvent %v", event)
-	// TODO
+	if line := event.Line; line != nil {
+		row := line.Number - m.firstLine
+		glog.Infof("Writing %q to row %d", line.Line, row)
+		col := 0
+		for _, r := range []rune(line.Line) {
+			m.screen.SetContent(col, row, r, nil, m.style)
+			col++
+		}
+		for ; col < m.w; col++ {
+			m.screen.SetContent(col, row, ' ', nil, m.style)
+		}
+		m.showScreen()
+		return
+	}
+	glog.Infof("handleDataEvent unhandled %v", event)
 }
 
 func (m *Meno) handleTermEvent(event tcell.Event) {
 	switch ev := event.(type) {
 	case *tcell.EventResize:
 		m.w, m.h = ev.Size()
+		glog.Infof("EventResize %d x %d", m.w, m.h)
 		m.resized()
 		m.showScreen()
 	case *tcell.EventKey:
@@ -140,10 +154,22 @@ func (m *Meno) handleSearchResult(r searchResult) {
 */
 
 func (m *Meno) finish() {
-	glog.Infof("calling Fini")
-	m.screen.Fini()
+	/*
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			for _ = range m.eventC {
+			}
+			wg.Done()
+		}()
+	*/
+
 	glog.Infof("stopping driver")
 	m.driver.Stop()
+	//wg.Wait()
+
+	glog.Infof("calling Fini")
+	m.screen.Fini()
 	glog.Infof("meno finished!")
 	//os.Exit(0)
 	//m.quitC <- struct{}{}
@@ -310,7 +336,7 @@ func (m *Meno) changeMode(mode Mode) {
 
 func (m *Meno) maxFirstLine() int {
 	// TODO
-	return -1
+	return 100
 	//return m.data.VisibleLines() - m.h + 1
 }
 
@@ -332,11 +358,12 @@ func (m *Meno) jumpToLine(newPos int) {
 	} else if newPos > m.maxFirstLine() {
 		newPos = m.maxFirstLine()
 	}
+	glog.Infof("jumpToLine %d", newPos)
 	if newPos == m.firstLine {
 		return
 	}
 	m.firstLine = newPos
-	m.showScreen()
+	m.driver.WatchLines(m.firstLine, m.h-1)
 }
 
 func (m *Meno) jumpToLastLine() {
@@ -348,8 +375,8 @@ func (m *Meno) resized() {
 	m.screen.Sync()
 
 	m.driver.ResizeWindow(m.w)
-	m.driver.WatchLines(m.firstLine, m.h)
-	glog.Infof("Window resized")
+	m.driver.WatchLines(m.firstLine, m.h-1)
+	glog.Infof("Window resized (%d x %d)", m.w, m.h)
 
 	// TODO: Adjust first line so that the first character of the previously
 	// visible first line is still in the visible first line (somewhere, not
@@ -370,26 +397,8 @@ func (m *Meno) resized() {
 }
 
 func (m *Meno) showScreen() {
-	m.screen.Clear()
-	row := 0
-
-	/*
-		// Leave the last line for the prompt.
-		lastRow := m.h - 1
-
-		for i := m.firstLine; i < m.data.VisibleLines(); i++ {
-			vline := m.data.lines.Line(i)
-			col := 0
-			for _, r := range []rune(vline.line) {
-				m.screen.SetContent(col, row, r, nil, m.style)
-				col++
-			}
-			row++
-			if row >= lastRow {
-				break
-			}
-		}
-	*/
+	// Show only the last row
+	row := m.h - 1
 
 	operator := ':'
 	showOperator := true

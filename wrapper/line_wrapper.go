@@ -93,6 +93,7 @@ outer:
 				if !sub.lineWanted(line.number) {
 					continue
 				}
+				glog.Infof("sending line %d to subscription", line.number)
 				sub.respC <- line
 			}
 		case <-lw.quitC:
@@ -179,6 +180,12 @@ func (cr chanRequest) String() string {
 	}
 	if sub := cr.newSub; sub != nil {
 		return fmt.Sprintf("subscription of lines %d:%d", sub.from, sub.to)
+	}
+	if sub := cr.cancelSub; sub != nil {
+		return fmt.Sprintf("cancel subscription %d", *sub)
+	}
+	if block := cr.linesInBlock; block != nil {
+		return fmt.Sprintf("lines in block %d", block)
 	}
 	return "unknown"
 }
