@@ -5,7 +5,9 @@ import (
 	"log"
 	"os"
 
-	"github.com/ewaters/meno/data"
+	"github.com/ewaters/meno/blocks"
+	"github.com/ewaters/meno/term"
+	"github.com/gdamore/tcell/v2"
 )
 
 var (
@@ -22,15 +24,31 @@ func main() {
 	}
 	defer inFile.Close()
 
-	m, err := data.NewMeno(inFile, *maxQuery)
+	stat, err := os.Stat(path)
+	if err != nil {
+		log.Fatalf("Stat(%q): %v", path, err)
+	}
+
+	config := term.MenoConfig{
+		Config: blocks.Config{
+			Source: blocks.ConfigSource{
+				Input: inFile,
+				Size:  int(stat.Size()),
+			},
+			BlockSize:      1024,
+			IndexNextBytes: *maxQuery - 1,
+		},
+		LineSeperator: []byte("\n"),
+	}
+
+	screen, err := tcell.NewScreen()
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := m.SetLogFile("/tmp/meno.log"); err != nil {
+
+	m, err := term.NewMeno(config, screen)
+	if err != nil {
 		log.Fatal(err)
 	}
-	defer m.Close()
-	if err := m.Run(); err != nil {
-		log.Fatal(err)
-	}
+	m.Run()
 }
