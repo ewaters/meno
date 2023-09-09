@@ -119,19 +119,21 @@ func getScreenState(screen tcell.SimulationScreen) screenState {
 func assertScreen(t *testing.T, screen tcell.SimulationScreen, want lineMatches) {
 	t.Helper()
 
-	const tryTimes = 5
-	const delay = 100 * time.Millisecond
-	remainingTimes := tryTimes
+	const (
+		totalDelay = 1 * time.Second
+		loopDelay  = 10 * time.Millisecond
+	)
+	remainingDelay := totalDelay
 	for {
 		state := getScreenState(screen)
 		if state.matches(t, want) {
 			break
 		}
-		remainingTimes--
-		if remainingTimes == 0 {
-			t.Fatalf("Screen didn't match after %d tries (delay %v):\n got:\n%v\nwant:\n%v", tryTimes, delay, state, want)
+		remainingDelay -= loopDelay
+		if remainingDelay <= 0 {
+			t.Fatalf("Screen didn't match after %v:\n got:\n%v\nwant:\n%v", totalDelay, state, want)
 		}
-		time.Sleep(delay)
+		time.Sleep(loopDelay)
 	}
 }
 
@@ -180,20 +182,65 @@ func TestTerm(t *testing.T) {
 		writer.Write([]byte(sb.String()))
 	}
 
-	assertScreen(t, screen, []lineMatch{
+	firstPage := []lineMatch{
 		{0, "000: .+"},
 		{1, "001: .+"},
 		{23, "023: .+"},
 		{24, ":"},
-	})
-
-	screen.InjectKeyBytes([]byte("j"))
-
-	assertScreen(t, screen, []lineMatch{
+	}
+	oneLineDown := []lineMatch{
 		{0, "001: .+"},
 		{23, "024: .+"},
 		{24, ":"},
-	})
+	}
+	secondPage := []lineMatch{
+		{0, "024: .+"},
+		{23, "047: .+"},
+		{24, ":"},
+	}
+	lastPage := []lineMatch{
+		{0, "024: .+"},
+		{23, "047: .+"},
+		{24, ":"},
+	}
+
+	assertScreen(t, screen, firstPage)
+
+	// Down one line.
+	screen.InjectKeyBytes([]byte("j"))
+	assertScreen(t, screen, oneLineDown)
+
+	// Up one line.
+	screen.InjectKeyBytes([]byte("k"))
+	assertScreen(t, screen, firstPage)
+
+	// Can't go up above the first line.
+	screen.InjectKeyBytes([]byte("kkkkkkkkk"))
+	assertScreen(t, screen, firstPage)
+
+	// Down one page.
+	screen.InjectKeyBytes([]byte(" "))
+	assertScreen(t, screen, secondPage)
+
+	// Up one page.
+	screen.InjectKeyBytes([]byte("b"))
+	assertScreen(t, screen, firstPage)
+
+	// Down one page.
+	screen.InjectKeyBytes([]byte("f"))
+	assertScreen(t, screen, secondPage)
+
+	// Jump to top.
+	screen.InjectKeyBytes([]byte("g"))
+	assertScreen(t, screen, firstPage)
+
+	// Page down.
+	screen.InjectKey(tcell.KeyPgDn, ' ', tcell.ModNone)
+	assertScreen(t, screen, secondPage)
+
+	// Jump to bottom.
+	screen.InjectKeyBytes([]byte("G"))
+	assertScreen(t, screen, lastPage)
 
 	screen.InjectKeyBytes([]byte("q"))
 

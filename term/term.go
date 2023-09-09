@@ -100,7 +100,7 @@ outer:
 func (m *Meno) handleDataEvent(event wrapper.Event) {
 	if line := event.Line; line != nil {
 		row := line.Number - m.firstLine
-		glog.Infof("Writing %q to row %d", line.Line, row)
+		//glog.Infof("Writing %q to row %d", line.Line, row)
 		col := 0
 		for _, r := range []rune(line.Line) {
 			m.screen.SetContent(col, row, r, nil, m.style)
@@ -335,9 +335,7 @@ func (m *Meno) changeMode(mode Mode) {
 }
 
 func (m *Meno) maxFirstLine() int {
-	// TODO
-	return 100
-	//return m.data.VisibleLines() - m.h + 1
+	return m.driver.TotalLines() - m.h + 1
 }
 
 func (m *Meno) pageSize() int {
@@ -367,7 +365,7 @@ func (m *Meno) jumpToLine(newPos int) {
 }
 
 func (m *Meno) jumpToLastLine() {
-	// TODO
+	m.jumpToLine(m.maxFirstLine())
 }
 
 func (m *Meno) resized() {

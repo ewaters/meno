@@ -35,6 +35,8 @@ type lineWrapCall struct {
 	// to run). This is to permit another lineWrapCall to backfill up to that
 	// point before resuming the read.
 	doneC chan int
+
+	lastWrapEvent *wrapEvent
 }
 
 func (d *Driver) newLineWrapCall(width int) *lineWrapCall {
@@ -55,7 +57,8 @@ func (d *Driver) newLineWrapCall(width int) *lineWrapCall {
 // backfill up to this point before resuming the read.
 func (lwc *lineWrapCall) run(backfillToID int) {
 	blockC := make(chan blocks.Block)
-	go lwc.wrapper.Run(blockC, nil)
+	wrapEventC := make(chan wrapEvent, 100)
+	go lwc.wrapper.Run(blockC, wrapEventC)
 
 	if backfillToID != -1 {
 		glog.Infof("[lwc: %d] Backfilling to ID %d", lwc.width, backfillToID)
@@ -90,6 +93,9 @@ outer:
 				close(blockC)
 				blockClosed = true
 			}
+		case wrapEvent := <-wrapEventC:
+			glog.Infof("[lwc: %d]: %v", lwc.width, wrapEvent)
+			lwc.lastWrapEvent = &wrapEvent
 		}
 	}
 	glog.Infof("[lwc: %d]: done; last ID %d", lwc.width, lastID)
@@ -174,14 +180,8 @@ type Event struct {
 
 func (d *Driver) Events() chan Event { return d.eventC }
 
-// Run will do the following:
-//
-//  1. Start the passed `blocks.Reader`, reading from the input source.
-//  2. The resulting blocks are passed to a `lineWrapper`, using the `width`
-//     and `lineSep` from `New()` to wrap the blocks.
-//  3. We subscribe to line events from the `lineWrapper` and will deliver
-//     lines that range from [0, `height`) to the passed `eventC`.
 func (d *Driver) Run() {
+	// Subscribe to block events.
 	go d.reader.Run(d.blockEventC)
 }
 
@@ -205,6 +205,13 @@ func (d *Driver) closeActiveFilter() error {
 	<-d.filter.doneC
 	d.filter = nil
 	return nil
+}
+
+func (d *Driver) TotalLines() int {
+	if d.wrapCall == nil || d.wrapCall.lastWrapEvent == nil {
+		return 0
+	}
+	return d.wrapCall.lastWrapEvent.lines
 }
 
 func (d *Driver) WatchLines(top, height int) error {

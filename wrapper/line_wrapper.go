@@ -32,6 +32,10 @@ type wrapEvent struct {
 	lines int
 }
 
+func (we wrapEvent) String() string {
+	return fmt.Sprintf("total lines: %d", we.lines)
+}
+
 type lineWrapper struct {
 	width   int
 	lineSep []byte
