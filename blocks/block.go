@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/ewaters/meno/trigram"
 	"github.com/golang/glog"
@@ -34,6 +35,7 @@ type Reader struct {
 	Config
 
 	reqC  chan chanRequest
+	readC chan readData
 	doneC chan bool
 }
 
@@ -161,12 +163,25 @@ func (e Event) Equals(other Event) bool {
 	return e.String() == other.String()
 }
 
-// A request to the internal Run() event loop.
-type chanRequest struct {
-	// Sent from read() goroutine
+type readData struct {
 	bytesRead []byte
 	readDone  bool
+}
 
+func (rd readData) String() string {
+	var sb strings.Builder
+	sb.WriteString("readData ")
+	if r := len(rd.bytesRead); r > 0 {
+		fmt.Fprintf(&sb, "bytesRead len %d", r)
+	}
+	if rd.readDone {
+		sb.WriteString("read done")
+	}
+	return sb.String()
+}
+
+// A request to the internal Run() event loop.
+type chanRequest struct {
 	// GetBlock(id)
 	// GetBlockRange(start, end)
 	// GetBytes()
@@ -184,12 +199,6 @@ type chanRequest struct {
 func (cr chanRequest) String() string {
 	var sb strings.Builder
 	sb.WriteString("chanRequest ")
-	if r := len(cr.bytesRead); r > 0 {
-		fmt.Fprintf(&sb, "bytesRead len %d", r)
-	}
-	if cr.readDone {
-		sb.WriteString("read done")
-	}
 	if bior := cr.getBlockRange; bior != nil {
 		fmt.Fprintf(&sb, "get block range %v", *bior)
 	}
@@ -224,6 +233,7 @@ func NewReader(config Config) (*Reader, error) {
 	return &Reader{
 		Config: config,
 		reqC:   make(chan chanRequest),
+		readC:  make(chan readData),
 		doneC:  make(chan bool),
 	}, nil
 }
@@ -233,7 +243,7 @@ func (r *Reader) read() {
 	for {
 		n, err := r.Source.Input.Read(buf)
 		if n > 0 {
-			r.reqC <- chanRequest{
+			r.readC <- readData{
 				bytesRead: append([]byte{}, buf[:n]...),
 			}
 		}
@@ -244,7 +254,7 @@ func (r *Reader) read() {
 			glog.Fatal(err)
 		}
 	}
-	r.reqC <- chanRequest{
+	r.readC <- readData{
 		readDone: true,
 	}
 }
@@ -252,11 +262,13 @@ func (r *Reader) read() {
 func (r *Reader) Run(eventC chan Event) {
 	go r.read()
 
+	// Protected by mutex
+	var mu sync.Mutex
 	var blocks []*Block
 	var readStatus ReadStatus
-	var pendingBytes []byte
 	index := trigram.NewIndex()
 	var newlines []BlockIDOffset
+	// End protected by mutex
 
 	if r.Source.Size > 0 {
 		readStatus.RemainingBytes = r.Source.Size
@@ -265,6 +277,7 @@ func (r *Reader) Run(eventC chan Event) {
 	}
 
 	newBlock := func(buf, next []byte) {
+		mu.Lock()
 		readStatus.BytesRead += len(buf)
 		if readStatus.RemainingBytes > 0 {
 			readStatus.RemainingBytes -= len(buf)
@@ -282,48 +295,74 @@ func (r *Reader) Run(eventC chan Event) {
 		readStatus.Newlines += block.Newlines
 		readStatus.Blocks++
 		blocks = append(blocks, block)
-		eventC <- Event{
+		event := Event{
 			NewBlock: block,
 			Status:   readStatus,
 		}
+		mu.Unlock()
+
+		eventC <- event
 	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		var pendingBytes []byte
+		for req := range r.readC {
+			glog.V(2).Infof("Reader.Run readC %v", req)
+			if req.bytesRead != nil {
+				pendingBytes = append(pendingBytes, req.bytesRead...)
+				block, next := r.BlockSize, r.IndexNextBytes
+				if len(pendingBytes) < block+next {
+					continue
+				}
+				newBlock(pendingBytes[:block], pendingBytes[block:block+next])
+				pendingBytes = pendingBytes[block:]
+				continue
+			}
+			if req.readDone {
+				glog.Infof("Reader.Run read done")
+				mu.Lock()
+				readStatus.RemainingBytes = 0
+				mu.Unlock()
+				newBlock(pendingBytes, []byte{})
+				continue
+			}
+		}
+		wg.Done()
+	}()
 
 	for req := range r.reqC {
 		glog.V(2).Infof("Reader.Run reqC %v", req)
-		if req.bytesRead != nil {
-			pendingBytes = append(pendingBytes, req.bytesRead...)
-			block, next := r.BlockSize, r.IndexNextBytes
-			if len(pendingBytes) < block+next {
-				continue
-			}
-			newBlock(pendingBytes[:block], pendingBytes[block:block+next])
-			pendingBytes = pendingBytes[block:]
-			continue
-		}
-		if req.readDone {
-			glog.Infof("Reader.Run read done")
-			readStatus.RemainingBytes = 0
-			newBlock(pendingBytes, []byte{})
-			continue
-		}
 		resp := chanResponse{}
 		if bior := req.getBlockRange; bior != nil {
 			start, end := bior.Start.BlockID, bior.End.BlockID
+
+			mu.Lock()
 			max := len(blocks) - 1
+			mu.Unlock()
+
 			if start > end || start < 0 || end < 0 || start > max || end > max {
 				resp.err = fmt.Errorf("Invalid block range: %d -> %d (max %d)", start, end, max)
 				req.respC <- resp
 				continue
 			}
+
+			mu.Lock()
 			resp.blocks = blocks[start : end+1]
+			mu.Unlock()
+
 			req.respC <- resp
 			continue
 		}
 		if req.blockIDsContaining != nil {
+			mu.Lock()
 			query := *req.blockIDsContaining
 			for _, qr := range index.Query(*req.blockIDsContaining) {
 				id := int(qr.DocID)
+
 				offset := r.blockIDContains(id, blocks, query)
+
 				if offset == -1 {
 					continue
 				}
@@ -332,13 +371,17 @@ func (r *Reader) Run(eventC chan Event) {
 					Offset:  offset,
 				})
 			}
+			mu.Unlock()
+
 			req.respC <- resp
 			continue
 		}
 		if req.getLine != nil {
+			mu.Lock()
 			idx := *req.getLine
 			if idx < 0 || idx > len(newlines)-1 {
 				resp.err = fmt.Errorf("Invalid getLine idx %d; can't exceed %d", idx, len(newlines))
+				mu.Unlock()
 				req.respC <- resp
 				continue
 			}
@@ -353,11 +396,13 @@ func (r *Reader) Run(eventC chan Event) {
 				}
 			}
 			resp.blockIDOffsetRange = &BlockIDOffsetRange{start, end}
+			mu.Unlock()
 			req.respC <- resp
 			continue
 		}
 		glog.Fatalf("Unhandled request %v", req)
 	}
+	wg.Wait()
 	r.doneC <- true
 }
 
@@ -442,6 +487,7 @@ func (r *Reader) GetLine(idx int) (*BlockIDOffsetRange, error) {
 }
 
 func (r *Reader) Stop() {
+	close(r.readC)
 	close(r.reqC)
 	<-r.doneC
 }
