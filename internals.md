@@ -73,7 +73,19 @@ Blocked by:
 
 ## Issue
 
-* lineWrapper.Run is trying to write to wrapEventC and is not reading lineC
-* generateVisibleLines is stuck writing to lineC and cannot read from blockC
-* lineWrapCall.run() is stuck writing to blockC and cannot read from wrapEventC.
+A window resize while still reading the data freezes.
+
+* block.go Reader reads data and send is to reqC
+* bytesRead and readDone both call newBlock which blocks on eventC
+* Driver.ResizeWindow creates a new lineWrapCall and runs it
+* lineWrapCall.run will backfill via block.Reader.GetBlockRange
+
+What reads the block.Reader.eventC?
+
+* block.Reader eventC is the Driver.blockEventC
+* This is only read in lineWrapCall
+
+So, the backfill can't fetch the data because the Reader.Run reqC loop is
+blocked on sending an event to eventC, which isn't being watched yet since we're
+intentionally backfilling before processing new blocks.
 

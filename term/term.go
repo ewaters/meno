@@ -92,10 +92,10 @@ outer:
 				glog.Infof("driver.Events closed; breaking Run")
 				break outer
 			}
-			glog.Infof("Run() driver event %v", ev)
+			glog.V(1).Infof("Run() driver event %v", ev)
 			m.handleDataEvent(ev)
 		case ev := <-m.eventC:
-			glog.Infof("Run() eventC event %v", ev)
+			glog.V(1).Infof("Run() eventC event %v", ev)
 			m.handleTermEvent(ev)
 		}
 	}
@@ -116,7 +116,7 @@ func (m *Meno) handleDataEvent(event wrapper.Event) {
 		m.showScreen()
 		return
 	}
-	glog.Infof("handleDataEvent unhandled %v", event)
+	glog.Errorf("handleDataEvent unhandled %v", event)
 }
 
 func (m *Meno) handleTermEvent(event tcell.Event) {
@@ -136,7 +136,7 @@ func (m *Meno) handleTermEvent(event tcell.Event) {
 		case ModeSearchActive:
 			m.keyDownSearchActive(ev)
 		default:
-			glog.Infof("EventKey %v for mode %v not handled", ev, m.mode)
+			glog.Errorf("EventKey %v for mode %v not handled", ev, m.mode)
 		}
 	}
 }
@@ -225,10 +225,10 @@ func (m *Meno) keyDownPaging(ev *tcell.EventKey) {
 				m.startSearch(true)
 			}
 		default:
-			glog.Infof("keyDownPaging unhandled rune %q", ev.Rune())
+			glog.Errorf("keyDownPaging unhandled rune %q", ev.Rune())
 		}
 	default:
-		glog.Infof("keyDownPaging unhandled EventKey %v", ev.Key())
+		glog.Errorf("keyDownPaging unhandled EventKey %v", ev.Key())
 	}
 }
 
@@ -248,7 +248,7 @@ func (m *Meno) keyDownSearch(ev *tcell.EventKey) {
 		newInput := append([]rune{}, m.searchInput...)
 		m.updateSearch(append(newInput, ev.Rune()))
 	default:
-		glog.Infof("keyDownSearch unhandled EventKey %v", ev.Key())
+		glog.Errorf("keyDownSearch unhandled EventKey %v", ev.Key())
 	}
 }
 
@@ -257,7 +257,7 @@ func (m *Meno) keyDownSearchActive(ev *tcell.EventKey) {
 	case tcell.KeyEscape, tcell.KeyCtrlC:
 		m.changeMode(ModePaging)
 	default:
-		glog.Infof("keyDownSearching unhandled EventKey %v", ev.Key())
+		glog.Errorf("keyDownSearching unhandled EventKey %v", ev.Key())
 	}
 }
 

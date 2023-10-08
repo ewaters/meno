@@ -69,7 +69,7 @@ func (d *Driver) newLineWrapCall(width int) *lineWrapCall {
 // lineWrapper and return the last block ID that was read from `blockEventC` so
 // that a new lineWrapCall can be created (with a different width) that will
 // backfill up to this point before resuming the read.
-func (lwc *lineWrapCall) run(backfillToID int) {
+func (lwc *lineWrapCall) run(lastID int) {
 	blockC := make(chan blocks.Block)
 	wrapEventC := make(chan wrapEvent)
 	go lwc.wrapper.Run(blockC, wrapEventC)
@@ -84,20 +84,33 @@ func (lwc *lineWrapCall) run(backfillToID int) {
 		wg.Done()
 	}()
 
-	if backfillToID != -1 {
-		glog.Infof("[lwc: %d] Backfilling to ID %d", lwc.width, backfillToID)
-		blocks, err := lwc.d.reader.GetBlockRange(0, backfillToID)
+	if lastID != -1 {
+		glog.Infof("[lwc: %d] Backfilling to ID %d", lwc.width, lastID)
+		// TODO(waters): This feels wrong. I should stream the blocks instead of
+		// fetching them all at once. However, since it's just a pointer to the
+		// blocks, it's only making a copy of a slice of pointers.
+		blocks, err := lwc.d.reader.GetBlockRange(0, lastID)
 		if err != nil {
-			glog.Fatalf("GetBlockRange(0, %d): %v", backfillToID, err)
+			glog.Fatalf("GetBlockRange(0, %d): %v", lastID, err)
 		}
+		glog.Infof("[lwc: %d] Sending %d blocks", lwc.width, len(blocks))
+
 		for _, block := range blocks {
-			glog.Infof("[lwc: %d] Backfill block %v", lwc.width, block)
-			blockC <- *block
+			glog.V(1).Infof("[lwc: %d] Backfill block %v", lwc.width, block)
+			select {
+			case <-lwc.quitC:
+				glog.Infof("[lwc: %d] Backfill quit; aborting", lwc.width)
+				close(blockC)
+				wg.Wait()
+				lwc.doneC <- lastID
+				return
+			case blockC <- *block:
+			}
 		}
+		glog.Infof("[lwc: %d] Backfill to ID %d done", lwc.width, lastID)
 	}
 
 	blockClosed := false
-	lastID := -1
 outer:
 	for {
 		select {
@@ -304,6 +317,7 @@ func (d *Driver) ResizeWindow(width int) error {
 		return fmt.Errorf("Invalid width %d", width)
 	}
 	if d.wrapCall != nil && d.wrapCall.width == width {
+		glog.Infof("ResizeWindow width %d same as before; doing nothing", width)
 		return nil
 	}
 	d.closeActiveFilter()

@@ -79,9 +79,7 @@ outer:
 				continue
 			}
 			line.number = len(lines)
-			if enableLogger {
-				glog.Infof("got line %v", line)
-			}
+			glog.V(1).Infof("got line %v", line)
 			lines = append(lines, line)
 			for id := line.loc.Start.BlockID; id <= line.loc.End.BlockID; id++ {
 				linesByBlock[id] = append(linesByBlock[id], line.number)
@@ -104,9 +102,7 @@ outer:
 		case <-lw.quitC:
 			break outer
 		case req := <-lw.reqC:
-			if enableLogger {
-				glog.Infof("got req %v", req)
-			}
+			glog.V(1).Infof("got req %v", req)
 			resp := chanResponse{}
 			if req.lineCount {
 				resp.lineCount = len(lines)
@@ -284,18 +280,16 @@ func generateVisibleLines(lineSep []byte, width int, blockC chan blocks.Block, l
 			BlockID: block.ID,
 			Offset:  0 - len(leftOver),
 		}
-		if false && enableLogger {
-			glog.Infof("reset start: %v, end: %v", start, end)
-		}
+		glog.V(2).Infof("reset start: %v, end: %v", start, end)
 
 		combined := append(leftOver, block.Bytes...)
 		lines := bytes.Split(combined, lineSep)
-		if enableLogger {
+		if glog.V(1) {
 			var linesStr []string
 			for _, line := range lines {
 				linesStr = append(linesStr, string(line))
 			}
-			glog.Infof("Block [%d] %q, have lines %q", block.ID, string(block.Bytes), linesStr)
+			glog.V(1).Infof("Block [%d] %q, have lines %q", block.ID, string(block.Bytes), linesStr)
 		}
 		leftOver = nil
 		endsWithNewline = bytes.HasSuffix(combined, lineSep)
@@ -319,17 +313,12 @@ func generateVisibleLines(lineSep []byte, width int, blockC chan blocks.Block, l
 					},
 					endsWithLineSep: false,
 				}
-				if enableLogger {
-					glog.Infof("line: %q, sending vl %v (wrapped)", string(line[:width]), vl)
-				}
-				glog.V(1).Infof("<- lineC %v", vl)
+				glog.V(1).Infof("<- lineC line: %q, sending vl %v (wrapped)", string(line[:width]), vl)
 				lineC <- vl
 				line = line[width:]
 				end.Offset++
 				start = end
-				if false && enableLogger {
-					glog.Infof("start: %v, end: %v", start, end)
-				}
+				glog.V(2).Infof("start: %v, end: %v", start, end)
 			}
 			if !lastLine || endsWithNewline {
 				end.Offset += len(line) - 1 + len(lineSep)
@@ -340,16 +329,11 @@ func generateVisibleLines(lineSep []byte, width int, blockC chan blocks.Block, l
 					},
 					endsWithLineSep: true,
 				}
-				if enableLogger {
-					glog.Infof("line: %q, sending vl %v", string(line), vl)
-				}
 				glog.V(1).Infof("<- lineC %v", vl)
 				lineC <- vl
 				end.Offset++
 				start = end
-				if false && enableLogger {
-					glog.Infof("start: %v, end: %v", start, end)
-				}
+				glog.V(2).Infof("start: %v, end: %v", start, end)
 			} else {
 				leftOver = line
 				leftOverStart = start
@@ -367,10 +351,7 @@ func generateVisibleLines(lineSep []byte, width int, blockC chan blocks.Block, l
 			},
 			endsWithLineSep: endsWithNewline,
 		}
-		if enableLogger {
-			glog.Infof("leftover line: %q, sending vl %v", string(leftOver), vl)
-		}
-		glog.V(1).Infof("<- lineC %v", vl)
+		glog.V(1).Infof("<- lineC leftover line: %q, sending vl %v", string(leftOver), vl)
 		lineC <- vl
 	}
 	glog.V(1).Infof("close(lineC)")

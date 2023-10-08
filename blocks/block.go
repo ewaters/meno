@@ -289,7 +289,7 @@ func (r *Reader) Run(eventC chan Event) {
 	}
 
 	for req := range r.reqC {
-		//glog.Infof("Got req %v", req)
+		glog.V(2).Infof("Reader.Run reqC %v", req)
 		if req.bytesRead != nil {
 			pendingBytes = append(pendingBytes, req.bytesRead...)
 			block, next := r.BlockSize, r.IndexNextBytes
@@ -301,6 +301,7 @@ func (r *Reader) Run(eventC chan Event) {
 			continue
 		}
 		if req.readDone {
+			glog.Infof("Reader.Run read done")
 			readStatus.RemainingBytes = 0
 			newBlock(pendingBytes, []byte{})
 			continue
@@ -380,8 +381,11 @@ func (r *Reader) sendRequest(req chanRequest) chanResponse {
 
 func (r *Reader) GetBlock(id int) (*Block, error) {
 	blocks, err := r.GetBlockRange(id, id)
-	if len(blocks) != 1 || err != nil {
+	if err != nil {
 		return nil, err
+	}
+	if len(blocks) != 1 {
+		return nil, fmt.Errorf("Expected one block, got %d", len(blocks))
 	}
 	return blocks[0], nil
 }
