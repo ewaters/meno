@@ -3,6 +3,7 @@ package wrapper
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/ewaters/meno/blocks"
 	"github.com/golang/glog"
@@ -36,7 +37,20 @@ type lineWrapCall struct {
 	// point before resuming the read.
 	doneC chan int
 
-	lastWrapEvent *wrapEvent
+	lastWrapEventMu sync.Mutex
+	lastWrapEvent   *wrapEvent
+}
+
+func (lwc *lineWrapCall) GetLastWrapEvent() *wrapEvent {
+	lwc.lastWrapEventMu.Lock()
+	defer lwc.lastWrapEventMu.Unlock()
+	return lwc.lastWrapEvent
+}
+
+func (lwc *lineWrapCall) SetLastWrapEvent(event wrapEvent) {
+	lwc.lastWrapEventMu.Lock()
+	defer lwc.lastWrapEventMu.Unlock()
+	lwc.lastWrapEvent = &event
 }
 
 func (d *Driver) newLineWrapCall(width int) *lineWrapCall {
@@ -57,8 +71,18 @@ func (d *Driver) newLineWrapCall(width int) *lineWrapCall {
 // backfill up to this point before resuming the read.
 func (lwc *lineWrapCall) run(backfillToID int) {
 	blockC := make(chan blocks.Block)
-	wrapEventC := make(chan wrapEvent, 100)
+	wrapEventC := make(chan wrapEvent)
 	go lwc.wrapper.Run(blockC, wrapEventC)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		for wrapEvent := range wrapEventC {
+			glog.V(1).Infof("[lwc: %d] -> wrapEventC %v", lwc.width, wrapEvent)
+			lwc.SetLastWrapEvent(wrapEvent)
+		}
+		wg.Done()
+	}()
 
 	if backfillToID != -1 {
 		glog.Infof("[lwc: %d] Backfilling to ID %d", lwc.width, backfillToID)
@@ -83,27 +107,26 @@ outer:
 			}
 			break outer
 		case blockEvent := <-lwc.d.blockEventC:
-			glog.Infof("[lwc: %d] Got block event %v", lwc.width, blockEvent)
+			glog.V(1).Infof("[lwc: %d] -> blockEventC %v", lwc.width, blockEvent)
 			if blockEvent.NewBlock != nil {
+				glog.V(1).Infof("[lwc: %d] <- blockC %d", lwc.width, blockEvent.NewBlock.ID)
 				blockC <- *blockEvent.NewBlock
 				lastID = blockEvent.NewBlock.ID
 			}
 			if blockEvent.Status.RemainingBytes == 0 {
-				glog.Infof("[lwc: %d]: Closing blockC since no remaining bytes", lwc.width)
+				glog.V(1).Infof("[lwc: %d] Closing blockC since no remaining bytes", lwc.width)
 				close(blockC)
 				blockClosed = true
 			}
-		case wrapEvent := <-wrapEventC:
-			glog.Infof("[lwc: %d]: %v", lwc.width, wrapEvent)
-			lwc.lastWrapEvent = &wrapEvent
 		}
 	}
-	glog.Infof("[lwc: %d]: done; last ID %d", lwc.width, lastID)
+	glog.Infof("[lwc: %d] done; last ID %d", lwc.width, lastID)
+	wg.Wait()
 	lwc.doneC <- lastID
 }
 
 func (lwc *lineWrapCall) stop() int {
-	glog.Infof("[lwc: %d]: stop", lwc.width)
+	glog.Infof("[lwc: %d] stop", lwc.width)
 	lwc.quitC <- true
 	lwc.wrapper.Stop()
 	return <-lwc.doneC
@@ -208,10 +231,14 @@ func (d *Driver) closeActiveFilter() error {
 }
 
 func (d *Driver) TotalLines() int {
-	if d.wrapCall == nil || d.wrapCall.lastWrapEvent == nil {
+	if d.wrapCall == nil {
 		return 0
 	}
-	return d.wrapCall.lastWrapEvent.lines
+	lastWrapEvent := d.wrapCall.GetLastWrapEvent()
+	if lastWrapEvent == nil {
+		return 0
+	}
+	return lastWrapEvent.lines
 }
 
 func (d *Driver) WatchLines(top, height int) error {

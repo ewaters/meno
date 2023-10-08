@@ -73,6 +73,8 @@ func NewMeno(config MenoConfig, s tcell.Screen) (*Meno, error) {
 	s.Clear()
 	m.w, m.h = s.Size()
 
+	glog.Infof("Window size set to %d x %d", m.w, m.h)
+
 	m.resized()
 
 	return m, nil
@@ -90,8 +92,10 @@ outer:
 				glog.Infof("driver.Events closed; breaking Run")
 				break outer
 			}
+			glog.Infof("Run() driver event %v", ev)
 			m.handleDataEvent(ev)
 		case ev := <-m.eventC:
+			glog.Infof("Run() eventC event %v", ev)
 			m.handleTermEvent(ev)
 		}
 	}

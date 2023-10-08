@@ -56,7 +56,7 @@ func newLineWrapper(width int, lineSep []byte) *lineWrapper {
 }
 
 // Runs until Stop is called. Make sure to close blockC before calling stop.
-func (lw *lineWrapper) Run(blockC chan blocks.Block, eventC chan wrapEvent) {
+func (lw *lineWrapper) Run(blockC chan blocks.Block, wrapEventC chan wrapEvent) {
 	lineC := make(chan visibleLine)
 
 	var lines []visibleLine
@@ -87,8 +87,9 @@ outer:
 				linesByBlock[id] = append(linesByBlock[id], line.number)
 			}
 			// Not sure if this is a good idea or not.
-			if eventC != nil {
-				eventC <- wrapEvent{
+			if wrapEventC != nil {
+				glog.V(1).Infof("<- wrapEventC lines: %d", len(lines))
+				wrapEventC <- wrapEvent{
 					lines: len(lines),
 				}
 			}
@@ -97,7 +98,7 @@ outer:
 				if !sub.lineWanted(line.number) {
 					continue
 				}
-				glog.Infof("sending line %d to subscription", line.number)
+				glog.V(1).Infof("<- respC sending line %d to subscription", line.number)
 				sub.respC <- line
 			}
 		case <-lw.quitC:
@@ -158,6 +159,9 @@ outer:
 	}
 	// Drain lineC
 	for range lineC {
+	}
+	if wrapEventC != nil {
+		close(wrapEventC)
 	}
 	wg.Wait()
 	lw.doneC <- true
@@ -266,10 +270,9 @@ func generateVisibleLines(lineSep []byte, width int, blockC chan blocks.Block, l
 
 	endsWithNewline := false
 
-	if enableLogger {
-		glog.Infof("Starting range over blockC")
-	}
+	glog.V(1).Infof("Starting range over blockC")
 	for block := range blockC {
+		glog.V(1).Infof("<- blockC %d", block.ID)
 		start := blocks.BlockIDOffset{
 			BlockID: block.ID,
 			Offset:  0,
@@ -319,6 +322,7 @@ func generateVisibleLines(lineSep []byte, width int, blockC chan blocks.Block, l
 				if enableLogger {
 					glog.Infof("line: %q, sending vl %v (wrapped)", string(line[:width]), vl)
 				}
+				glog.V(1).Infof("<- lineC %v", vl)
 				lineC <- vl
 				line = line[width:]
 				end.Offset++
@@ -339,6 +343,7 @@ func generateVisibleLines(lineSep []byte, width int, blockC chan blocks.Block, l
 				if enableLogger {
 					glog.Infof("line: %q, sending vl %v", string(line), vl)
 				}
+				glog.V(1).Infof("<- lineC %v", vl)
 				lineC <- vl
 				end.Offset++
 				start = end
@@ -365,7 +370,9 @@ func generateVisibleLines(lineSep []byte, width int, blockC chan blocks.Block, l
 		if enableLogger {
 			glog.Infof("leftover line: %q, sending vl %v", string(leftOver), vl)
 		}
+		glog.V(1).Infof("<- lineC %v", vl)
 		lineC <- vl
 	}
+	glog.V(1).Infof("close(lineC)")
 	close(lineC)
 }
