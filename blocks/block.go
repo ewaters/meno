@@ -356,13 +356,16 @@ func (r *Reader) Run(eventC chan Event) {
 			continue
 		}
 		if req.blockIDsContaining != nil {
-			mu.Lock()
 			query := *req.blockIDsContaining
-			for _, qr := range index.Query(*req.blockIDsContaining) {
+
+			mu.Lock()
+			results := index.Query(query)
+			mu.Unlock()
+
+			for _, qr := range results {
 				id := int(qr.DocID)
 
 				offset := r.blockIDContains(id, blocks, query)
-
 				if offset == -1 {
 					continue
 				}
@@ -371,7 +374,7 @@ func (r *Reader) Run(eventC chan Event) {
 					Offset:  offset,
 				})
 			}
-			mu.Unlock()
+			glog.Infof("Search %q found %d possible blocks and %d matching", query, len(results), len(resp.blockIDs))
 
 			req.respC <- resp
 			continue

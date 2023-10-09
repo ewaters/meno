@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"github.com/golang/glog"
 )
 
 var Debug bool
@@ -120,6 +122,10 @@ type QueryResult struct {
 	Score int
 }
 
+func (qr QueryResult) String() string {
+	return fmt.Sprintf("doc: %d score %d", qr.DocID, qr.Score)
+}
+
 type TrigramData struct {
 	docsByLength map[int][]uint64
 	count        int
@@ -128,13 +134,13 @@ type TrigramData struct {
 func (d *TrigramData) String() string {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "count: %d", d.count)
-	var docIDs []int
-	for docID := range d.docsByLength {
-		docIDs = append(docIDs, docID)
+	var lengths []int
+	for docLength := range d.docsByLength {
+		lengths = append(lengths, docLength)
 	}
-	sort.Ints(docIDs)
-	for _, docID := range docIDs {
-		fmt.Fprintf(&b, " %d => %v", docID, d.docsByLength[docID])
+	sort.Ints(lengths)
+	for _, docLength := range lengths {
+		fmt.Fprintf(&b, " %d => %v", docLength, d.docsByLength[docLength])
 	}
 	return b.String()
 }
@@ -268,7 +274,8 @@ func (idx *Index) AddWithID(doc string, docID uint64) {
 
 func (idx *Index) Query(doc string) []QueryResult {
 	tally := NewTrigramData()
-	for _, tg := range ToTrigram(doc) {
+	tgs := ToTrigram(doc)
+	for _, tg := range tgs {
 		tgData, ok := idx.grams[tg]
 		if !ok {
 			continue
@@ -277,6 +284,15 @@ func (idx *Index) Query(doc string) []QueryResult {
 		if Debug {
 			fmt.Printf("Added %q, now tally is %v\n", tg, tally)
 		}
+	}
+
+	freq := tally.MostFrequentDocs()
+	glog.Infof("Query %q (%v) may be in %d indexed docs (out of %d)", doc, tgs, len(freq), idx.docsAdded)
+	for i := 0; i < 10; i++ {
+		if i > len(freq)-1 {
+			break
+		}
+		glog.Infof(" %2d: %v", i, freq[i])
 	}
 
 	return tally.DocsContainingAllTrigrams()

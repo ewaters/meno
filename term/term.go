@@ -35,6 +35,14 @@ type Meno struct {
 	searchInput     []rune
 	lastSearchInput []rune
 	lastSearchMode  Mode
+
+	activeSearch *activeSearch
+}
+
+type activeSearch struct {
+	request       wrapper.SearchRequest
+	startFromLine int
+	searchDown    bool
 }
 
 func (m *Meno) Close() {
@@ -113,6 +121,15 @@ func (m *Meno) handleDataEvent(event wrapper.Event) {
 		for ; col < m.w; col++ {
 			m.screen.SetContent(col, row, ' ', nil, m.style)
 		}
+		m.showScreen()
+		return
+	}
+	if status := event.Search; status != nil {
+		if !status.Complete {
+			return
+		}
+		glog.Infof("Search status %v", status)
+		m.mode = ModePaging
 		m.showScreen()
 		return
 	}
@@ -262,12 +279,8 @@ func (m *Meno) keyDownSearchActive(ev *tcell.EventKey) {
 }
 
 func (m *Meno) startSearch(oppositeDirection bool) {
-	// TODO
-}
-
-/*
 	if len(m.searchInput) == 0 {
-		glog.Infof("ERROR: startSearch called without searchInput set")
+		glog.Errorf("startSearch called without searchInput set")
 		return
 	}
 	mode := m.mode
@@ -278,20 +291,34 @@ func (m *Meno) startSearch(oppositeDirection bool) {
 	m.mode = ModeSearchActive
 	m.showScreen()
 
+	m.activeSearch = &activeSearch{
+		request: wrapper.SearchRequest{
+			Query: string(m.lastSearchInput),
+		},
+	}
+
 	if oppositeDirection {
 		if mode == ModeSearchUp {
-			mode = ModeSearchDown
+			m.activeSearch.searchDown = true
 			glog.Infof("Search was up but flipped to down")
 		} else {
-			mode = ModeSearchUp
+			m.activeSearch.searchDown = false
 			glog.Infof("Search was down but flipped to up")
 		}
 	}
 
-	startFromLine := m.firstLine + 1
-	if mode == ModeSearchUp {
-		startFromLine = m.firstLine - 1
+	if m.activeSearch.searchDown {
+		m.activeSearch.startFromLine = m.firstLine + 1
+	} else {
+		m.activeSearch.startFromLine = m.firstLine - 1
 	}
+
+	if err := m.driver.Search(m.activeSearch.request); err != nil {
+		glog.Fatal(err)
+	}
+}
+
+/*
 
 	resultC := make(chan searchResult)
 
@@ -434,8 +461,4 @@ func (m *Meno) showScreen() {
 
 	m.screen.ShowCursor(col, row)
 	m.screen.Show()
-}
-
-func (m *Meno) readFile() error {
-	return nil
 }

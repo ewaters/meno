@@ -190,6 +190,10 @@ type SearchRequest struct {
 	Query string
 }
 
+func (sr SearchRequest) String() string {
+	return fmt.Sprintf("query: %q", sr.Query)
+}
+
 type SearchStatus struct {
 	Request  SearchRequest
 	Complete bool
@@ -367,7 +371,7 @@ func (d *Driver) runSearch(req SearchRequest) ([]LineOffsetRange, error) {
 	if err != nil {
 		return nil, err
 	}
-	glog.Infof("Found block IDs %v", blockIDs)
+	glog.Infof("runSearch(%q) Found block IDs %v", req.Query, blockIDs)
 
 	var results []LineOffsetRange
 	dedupeLor := make(map[string]bool)
