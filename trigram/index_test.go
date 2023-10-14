@@ -68,3 +68,8 @@ func TestSortedMaxResults(t *testing.T) {
 		t.Errorf("Running count differs from actual count: %d, %d", s.count, count)
 	}
 }
+
+func TestTrigramData(t *testing.T) {
+	//td := NewTrigramData()
+
+}

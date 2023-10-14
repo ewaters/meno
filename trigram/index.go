@@ -127,101 +127,56 @@ func (qr QueryResult) String() string {
 }
 
 type TrigramData struct {
-	docsByLength map[int][]uint64
-	count        int
+	docs map[uint64]bool
 }
 
 func (d *TrigramData) String() string {
 	var b bytes.Buffer
-	fmt.Fprintf(&b, "count: %d", d.count)
-	var lengths []int
-	for docLength := range d.docsByLength {
-		lengths = append(lengths, docLength)
-	}
-	sort.Ints(lengths)
-	for _, docLength := range lengths {
-		fmt.Fprintf(&b, " %d => %v", docLength, d.docsByLength[docLength])
+	fmt.Fprintf(&b, "size: %d", d.Size())
+	fmt.Fprintf(&b, "docs: [")
+	i := 0
+	for doc := range d.docs {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "%d", doc)
 	}
 	return b.String()
 }
 
 func NewTrigramData() *TrigramData {
 	return &TrigramData{
-		docsByLength: make(map[int][]uint64),
+		docs: make(map[uint64]bool),
 	}
 }
 
-func (d *TrigramData) DocsByLength() map[int][]uint64 { return d.docsByLength }
-func (d *TrigramData) Size() int                      { return d.count }
+func (d *TrigramData) Size() int { return len(d.docs) }
 
-func (d *TrigramData) Add(dl int, id uint64) {
-	d.docsByLength[dl] = append(d.docsByLength[dl], id)
-	d.count++
+func (d *TrigramData) Add(id uint64) {
+	d.docs[id] = true
 }
 
 func (d *TrigramData) AddFrom(rhs *TrigramData) {
-	for k, vals := range rhs.docsByLength {
-		d.docsByLength[k] = append(d.docsByLength[k], vals...)
+	for id := range rhs.docs {
+		d.docs[id] = true
 	}
-	d.count++
 }
 
 func (d *TrigramData) Docs() []uint64 {
 	var result []uint64
-	for _, vals := range d.docsByLength {
-		result = append(result, vals...)
+	for id := range d.docs {
+		result = append(result, id)
 	}
 	return result
 }
 
 func (d *TrigramData) MostFrequentDocs() []QueryResult {
-	docs := d.Docs()
-	sort.SliceStable(docs, func(i, j int) bool {
-		return docs[i] < docs[j]
-	})
-
 	var ret []QueryResult
-	lastSet := false
-	var last uint64
-	score := 0
-	for _, id := range docs {
-		if !lastSet {
-			last = id
-			lastSet = true
-			score = 1
-			continue
-		}
-		if id == last {
-			score++
-			continue
-		}
+	for id := range d.docs {
 		ret = append(ret, QueryResult{
-			DocID: last,
-			Score: score,
+			DocID: id,
+			Score: 1,
 		})
-		last = id
-		score = 1
-	}
-	ret = append(ret, QueryResult{
-		DocID: last,
-		Score: score,
-	})
-
-	if Debug {
-		for i, r := range ret {
-			fmt.Printf("MostFrequentDocs: #%3d: doc %d (%d score)\n", i, r.DocID, r.Score)
-		}
-	}
-	return ret
-}
-
-func (d *TrigramData) DocsContainingAllTrigrams() []QueryResult {
-	var ret []QueryResult
-	for _, qr := range d.MostFrequentDocs() {
-		if qr.Score != d.count {
-			continue
-		}
-		ret = append(ret, qr)
 	}
 	return ret
 }
@@ -261,41 +216,47 @@ func (idx *Index) AddWithID(doc string, docID uint64) {
 	if docID > idx.maxID {
 		idx.maxID = docID
 	}
-	docLength := len(doc)
 	for _, tg := range ToTrigram(doc) {
 		tgData, ok := idx.grams[tg]
 		if !ok {
 			tgData = NewTrigramData()
 			idx.grams[tg] = tgData
 		}
-		tgData.Add(docLength, docID)
+		tgData.Add(docID)
 	}
 }
 
 func (idx *Index) Query(doc string) []QueryResult {
-	tally := NewTrigramData()
 	tgs := ToTrigram(doc)
+
+	docScore := make(map[uint64]int)
 	for _, tg := range tgs {
 		tgData, ok := idx.grams[tg]
 		if !ok {
-			continue
+			glog.V(1).Infof("Trigram %v was not found in the index, so %q cannot be in it", tg, doc)
+			return nil
 		}
-		tally.AddFrom(tgData)
-		if Debug {
-			fmt.Printf("Added %q, now tally is %v\n", tg, tally)
+		for _, docID := range tgData.Docs() {
+			docScore[docID]++
 		}
 	}
 
-	freq := tally.MostFrequentDocs()
-	glog.Infof("Query %q (%v) may be in %d indexed docs (out of %d)", doc, tgs, len(freq), idx.docsAdded)
-	for i := 0; i < 10; i++ {
-		if i > len(freq)-1 {
-			break
+	var result []QueryResult
+	for docID, score := range docScore {
+		if score == len(tgs) {
+			result = append(result, QueryResult{
+				DocID: docID,
+				Score: 1,
+			})
 		}
-		glog.Infof(" %2d: %v", i, freq[i])
 	}
 
-	return tally.DocsContainingAllTrigrams()
+	sort.SliceStable(result, func(i, j int) bool {
+		return result[i].DocID < result[j].DocID
+	})
+
+	glog.Infof("Query %q (%v) may be in %d indexed docs (out of %d)", doc, tgs, len(result), idx.docsAdded)
+	return result
 }
 
 func (idx *Index) RemoveTrigramsWithFrequencyGreaterThan(freq float64) {

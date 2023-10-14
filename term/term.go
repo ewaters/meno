@@ -283,6 +283,7 @@ func (m *Meno) startSearch(oppositeDirection bool) {
 		glog.Errorf("startSearch called without searchInput set")
 		return
 	}
+	glog.Infof("startSearch %q", string(m.searchInput))
 	mode := m.mode
 
 	m.lastSearchInput = m.searchInput
