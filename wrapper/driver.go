@@ -461,8 +461,8 @@ func lineOffsetRangeForQueryIn(lines []*VisibleLine, query string) []LineOffsetR
 	if len(parts) == 1 {
 		return nil
 	}
-	//glog.Infof("parts %#v", parts)
-	//glog.Infof("lor %d  %#v", len(lorPerIndex), lorPerIndex)
+	glog.V(1).Infof("parts %#v", parts)
+	glog.V(1).Infof("lor %d  %#v", len(lorPerIndex), lorPerIndex)
 
 	var result []LineOffsetRange
 	index := 0

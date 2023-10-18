@@ -536,6 +536,9 @@ func TestLineOffsetRangeForQueryInMultiple(t *testing.T) {
 		{3, "1. abc def\n"},
 		{4, "2. def ghi\n"},
 		{5, "3. bla bla\n"},
+		{6, "ㄱㄴㄷ"},
+		{7, "ㄱㄴㄷ"},
+		{8, "ㄱㄴㄷ"},
 	}
 
 	for _, tc := range []struct {
@@ -555,6 +558,20 @@ func TestLineOffsetRangeForQueryInMultiple(t *testing.T) {
 				lor(5, 3, 5, 5),
 				lor(5, 7, 5, 9),
 			},
+		},
+		{
+			query: "ghi\n3.",
+			want: []LineOffsetRange{
+				lor(4, 7, 5, 1),
+			},
+		},
+		{
+			query: "ㄷ",
+			want:  []LineOffsetRange{},
+		},
+		{
+			query: "not found",
+			want:  []LineOffsetRange{},
 		},
 	} {
 		lor := lineOffsetRangeForQueryIn(vlines, tc.query)
